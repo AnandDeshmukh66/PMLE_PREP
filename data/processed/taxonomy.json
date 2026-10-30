@@ -1,0 +1,187 @@
+{
+ "source_url": "https://services.google.com/fh/files/misc/professional_machine_learning_engineer_exam_guide_english_new.pdf",
+ "guide_date": "2026-06-01",
+ "weights_sum_percent": 101,
+ "weights_note": "Official weights are approximate (~) and sum to 101%. They are stored as published; mock-exam allocation scales them proportionally.",
+ "domains": [
+  {
+   "number": 1,
+   "objectives": [
+    {
+     "code": "1.1",
+     "title": "Developing ML models using BigQuery ML or AutoML on Gemini Enterprise Agent Platform.",
+     "considerations": [
+      "Building models in BigQuery ML or Agent Platform AutoML (e.g., classification, regression, forecasting, and clustering) based on the business problem",
+      "Performing feature engineering or selection using BigQuery ML",
+      "Generating predictions using BigQuery ML",
+      "Training models using Agent Platform AutoML",
+      "Fine-tuning Gemini models using BigQuery"
+     ]
+    },
+    {
+     "code": "1.2",
+     "title": "Building AI solutions using Google Cloud AI APIs or foundational models.",
+     "considerations": [
+      "Evaluating and selecting the appropriate model for a given task from Gemini Enterprise Agent Platform Model Garden",
+      "Building applications using industry-specific APIs (e.g., Document AI API, Vision API, and Translate API)",
+      "Building solutions and tuning models for specific use cases (e.g., Gemini, Imagen, Veo, and models as a service in Model Garden)",
+      "Optimizing Gemini-based applications for cost, latency, and availability"
+     ]
+    }
+   ],
+   "weight_percent": 13,
+   "title": "Architecting low-code AI solutions"
+  },
+  {
+   "number": 2,
+   "objectives": [
+    {
+     "code": "2.1",
+     "title": "Exploring and preprocessing data for ML.",
+     "considerations": [
+      "Organizing and exploring different data types (e.g., tabular, text, and images) for efficient experimenting, training, and serving",
+      "Choosing the right tool for data preprocessing based on scale and complexity (e.g., BigQuery [SQL], Dataflow, Apache Spark, and in-memory Python frameworks)",
+      "Creating and consolidating features in Gemini Enterprise Agent Platform Feature Store",
+      "Ensuring data privacy and handling sensitive information (e.g., personally identifiable information [PII])"
+     ]
+    },
+    {
+     "code": "2.2",
+     "title": "Model prototyping using notebooks (e.g., Gemini Enterprise Agent Platform Workbench and Colab Enterprise).",
+     "considerations": [
+      "Applying collaboration and security best practices when setting up and running notebook environments",
+      "Developing models in Agent Platform Workbench or Colab Enterprise notebooks using common frameworks (e.g., PyTorch, sklearn, and JAX)",
+      "Using a variety of foundational and open-source models in Model Garden to create model prototypes in notebook environments"
+     ]
+    },
+    {
+     "code": "2.3",
+     "title": "Tracking and running ML experiments.",
+     "considerations": [
+      "Choosing the appropriate Google Cloud environment for development and experimentation (e.g., Experiments on Gemini Enterprise Agent Platform, Gemini Enterprise Agent Platform Pipelines, and Kubeflow Pipelines) given the framework",
+      "Evaluating predictive and gen AI solutions (e.g., model evaluation metrics and LLM-as-a-judge)",
+      "Tracking and comparing model artifacts, versions, and lineage (e.g., Experiments on Agent Platform and Gemini Enterprise Agent Platform ML Metadata)"
+     ]
+    }
+   ],
+   "weight_percent": 16,
+   "title": "Collaborating within and across teams to manage data and models"
+  },
+  {
+   "number": 3,
+   "objectives": [
+    {
+     "code": "3.1",
+     "title": "Building models given the task considering cost, complexity, latency, and scalability.",
+     "considerations": [
+      "Choosing the model type (e.g., ARIMA, DNN, and LLM)",
+      "Choosing the product (e.g., Agent Platform AutoML, BigQuery ML, and Agent Platform Pipelines)",
+      "Choosing the deployment strategy",
+      "Modeling techniques given interpretability requirements"
+     ]
+    },
+    {
+     "code": "3.2",
+     "title": "Training models.",
+     "considerations": [
+      "Organizing training data (e.g., tabular, text, speech, images, and videos) on Google Cloud (e.g., Cloud Storage and BigQuery)",
+      "Ingesting structured and unstructured data from various sources into training pipelines",
+      "Model training using different software development kits (SDKs) (e.g., Agent Platform custom training, Kubeflow on Google Kubernetes Engine [GKE], Agent Platform AutoML, and Tabular Workflows) and organizing training on Google Cloud",
+      "Troubleshooting ML model training failures",
+      "Hyperparameter tuning",
+      "Fine-tuning foundational models from Agent Platform and Model Garden and when tuning should be considered"
+     ]
+    },
+    {
+     "code": "3.3",
+     "title": "Choosing appropriate hardware for training.",
+     "considerations": [
+      "Evaluation of compute and accelerator options (e.g., CPU, GPU, and TPU)",
+      "Understanding the options for distributed training on GPUs and TPUs using data and model parallelism strategies"
+     ]
+    }
+   ],
+   "weight_percent": 21,
+   "title": "Scaling prototypes into ML models"
+  },
+  {
+   "number": 4,
+   "objectives": [
+    {
+     "code": "4.1",
+     "title": "Serving models.",
+     "considerations": [
+      "Deploying models for batch and online inference using appropriate services (e.g., Agent Platform, Model Garden, Cloud Run, and GKE)",
+      "Packaging and serving models from different frameworks (e.g., PyTorch and XGBoost) using prebuilt and custom containers",
+      "Organizing and versioning models in Gemini Enterprise Agent Platform Model Registry",
+      "Implementing model rollout strategies (e.g., A/B testing and canary deployments) to compare model versions",
+      "Developing solutions for inference preprocessing and postprocessing"
+     ]
+    },
+    {
+     "code": "4.2",
+     "title": "Scaling online model serving.",
+     "considerations": [
+      "Managing and serving features using Agent Platform Feature Store",
+      "Deploying models to public and private endpoints",
+      "Choosing appropriate hardware (e.g., CPU, GPU, TPU, and edge)",
+      "Scaling the serving backend based on the throughput (e.g., Gemini Enterprise Agent Platform Inference and containerized serving)",
+      "Tuning ML models for training and serving in production"
+     ]
+    }
+   ],
+   "weight_percent": 20,
+   "title": "Serving and scaling models"
+  },
+  {
+   "number": 5,
+   "objectives": [
+    {
+     "code": "5.1",
+     "title": "Developing end-to-end ML pipelines.",
+     "considerations": [
+      "Validating data and models",
+      "Building and orchestrating pipelines using managed or unmanaged services and from templates or custom solutions (e.g., Agent Platform Pipelines, Managed Service for Apache Airflow, and Ray on Gemini Enterprise Agent Platform)",
+      "Ensuring consistent data preprocessing between training and serving"
+     ]
+    },
+    {
+     "code": "5.2",
+     "title": "Automating model retraining.",
+     "considerations": [
+      "Determining an appropriate retraining policy",
+      "Deploying models in continuous integration, continuous delivery, and continuous training (CI/CD/CT) pipelines (e.g., Cloud Build)"
+     ]
+    }
+   ],
+   "weight_percent": 18,
+   "title": "Automating and orchestrating ML pipelines"
+  },
+  {
+   "number": 6,
+   "objectives": [
+    {
+     "code": "6.1",
+     "title": "Identifying risks to AI solutions.",
+     "considerations": [
+      "Building secure AI systems by protecting against unintentional exploitation and leaks of data or models (e.g., data exfiltration, malicious prompting, and sharing sensitive data with LLMs) using the appropriate security tool (e.g., Regex, safety filters, and Model Armor)",
+      "Aligning with responsible AI practices (e.g., monitoring for bias)",
+      "Model explainability on Agent Platform (e.g., Agent Platform Inference)"
+     ]
+    },
+    {
+     "code": "6.2",
+     "title": "Monitoring, testing, and troubleshooting AI solutions.",
+     "considerations": [
+      "Configuring and using Model Monitoring on Gemini Enterprise Agent Platform to establish continuous evaluation metrics for production models",
+      "Monitoring for common issues (e.g., training-serving skew, data drift, concept drift, and feature attribution drift)",
+      "Monitoring, testing, and evaluating gen AI solutions"
+     ]
+    }
+   ],
+   "weight_percent": 13,
+   "title": "Monitoring AI solutions"
+  }
+ ],
+ "concept_count": 149
+}

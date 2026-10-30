@@ -1,0 +1,65 @@
+{
+  "name": "pmle-prep",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "node scripts/db.mjs generate && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "postinstall": "node scripts/db.mjs generate",
+    "setup": "node scripts/db.mjs migrate deploy && node scripts/db.mjs generate && npm run ingest:db",
+    "db:migrate": "node scripts/db.mjs migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:generate": "node scripts/db.mjs generate",
+    "db:sync-schema": "node scripts/db.mjs sync",
+    "db:copy-to-postgres": "node scripts/db.mjs generate && tsx scripts/copy-sqlite-to-postgres.ts",
+    "claim-local-progress": "tsx scripts/claim-local-progress.ts",
+    "backup": "tsx scripts/backup-db.ts",
+    "ingest:python": "../.venv/bin/python scripts/pipeline.py",
+    "ingest:db": "tsx scripts/import-db.ts",
+    "ingest": "npm run ingest:python && npm run ingest:db"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.546.0",
+    "next": "16.4.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "recharts": "^3.2.1",
+    "server-only": "^0.0.1",
+    "tailwind-merge": "^3.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "@electric-sql/pglite-socket": "^0.2.15",
+    "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.56.0",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.3",
+    "prisma": "6.19.3",
+    "tailwindcss": "^4",
+    "tsx": "^4.20.6",
+    "typescript": "^5",
+    "vitest": "^3.2.4"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

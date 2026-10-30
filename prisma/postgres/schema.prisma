@@ -1,0 +1,431 @@
+// GENERATED from prisma/schema.prisma by scripts/db.mjs - edit that file, not this one.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- content (rebuilt by imports)
+
+model QuestionSource {
+  id             String             @id // "pdf" | "examprepper"
+  name           String
+  kind           String // "pdf" | "website"
+  url            String?
+  fileName       String?
+  declaredCount  Int?
+  extractedCount Int                @default(0)
+  occurrences    SourceOccurrence[]
+}
+
+model CanonicalQuestion {
+  id                            Int      @id @default(autoincrement())
+  code                          String   @unique
+  stem                          String
+  multiSelect                   Boolean  @default(false)
+  selectCount                   Int      @default(1)
+  primaryOccurrenceId           Int?
+  verification                  String   @default("unknown") // verified | source_key | contested | conflict | unknown | user_verified
+  verificationNote              String?
+  correctLabels                 String? // JSON string[]; null when no gradable answer
+  provisionalLabels             String? // JSON string[]; best-supported claim, for provisional feedback only
+  domainNumber                  Int?
+  objectiveCode                 String?
+  topic                         String?
+  subtopic                      String?
+  alignmentScore                Float    @default(0)
+  alignmentBand                 String   @default("weak")
+  classificationConfidence      String   @default("low")
+  classificationConfidenceValue Float    @default(0)
+  classificationExplanation     String   @default("")
+  classificationEvidence        String?
+  classificationStatus          String   @default("mapped") // mapped | unmapped | manual
+  legacyStatus                  String   @default("current")
+  legacyNotes                   String   @default("[]")
+  inPdf                         Boolean  @default(false)
+  inExamprepper                 Boolean  @default(false)
+  isCommon                      Boolean  @default(false)
+  hasImages                     Boolean  @default(false)
+  active                        Boolean  @default(true)
+  mergedIntoId                  Int?
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  options           AnswerOption[]
+  occurrences       SourceOccurrence[]         @relation("canonical")
+  claims            AnswerClaim[]
+  explanations      Explanation[]
+  topics            QuestionTopic[]
+  objectiveMappings QuestionObjectiveMapping[]
+  attempts          QuestionAttempt[]
+  flags             QuestionFlag[]
+  notes             QuestionNote[]
+  sessionQuestions  SessionQuestion[]
+  issues            ImportIssue[]
+
+  @@index([active, domainNumber])
+  @@index([objectiveCode])
+}
+
+model SourceOccurrence {
+  id                   Int                @id @default(autoincrement())
+  sourceKey            String             @unique // e.g. "pdf:84", "examprepper:136"
+  sourceId             String
+  source               QuestionSource     @relation(fields: [sourceId], references: [id])
+  canonicalId          Int?
+  canonical            CanonicalQuestion? @relation("canonical", fields: [canonicalId], references: [id])
+  homeCanonicalId      Int?
+  sourceQnum           Int
+  page                 Int?
+  pageEnd              Int?
+  url                  String?
+  originUrl            String?
+  topicLabel           String?
+  stem                 String
+  options              String // JSON [{label,text}]
+  answerLabels         String // JSON string[] as published by the source
+  rawText              String?
+  rawJson              String?
+  explanation          String?
+  discussion           String             @default("[]")
+  images               String             @default("[]")
+  issues               String             @default("[]")
+  extractionConfidence Float              @default(1)
+  contentHash          String
+  stemHash             String
+  legacyStatus         String             @default("current")
+  legacyHits           String             @default("[]")
+  classification       String             @default("{}")
+  claims               String             @default("[]")
+  lastImportRunId      Int?
+  updatedAt            DateTime           @updatedAt
+
+  @@index([canonicalId])
+}
+
+model AnswerOption {
+  id         Int               @id @default(autoincrement())
+  questionId Int
+  question   CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  label      String
+  text       String
+  order      Int
+
+  @@unique([questionId, label])
+}
+
+model AnswerClaim {
+  id           Int               @id @default(autoincrement())
+  claimKey     String            @unique
+  questionId   Int
+  question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  sourceKey    String? // null for user claims
+  kind         String // pdf_key | examprepper_answer | examtopics_key | community_vote | user_override
+  labels       String // JSON canonical labels
+  sourceLabels String // JSON labels as published
+  percent      Float?
+  distribution String?
+  incomplete   Boolean           @default(false)
+  unmappable   Boolean           @default(false)
+  createdBy    String            @default("import")
+  createdAt    DateTime          @default(now())
+}
+
+model Explanation {
+  id           Int               @id @default(autoincrement())
+  explKey      String            @unique
+  questionId   Int
+  question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  sourceKey    String?
+  kind         String // source | community | supplemental
+  content      String
+  verification String // source_provided | community_unverified | ai_generated_unverified
+  upvotes      Int?
+  sourceUrl    String?
+}
+
+// ---------------------------------------------------------------- blueprint & taxonomy
+
+model ExamDomain {
+  number        Int             @id
+  title         String
+  weightPercent Int?
+  objectives    ExamObjective[]
+}
+
+model ExamObjective {
+  code           String                     @id
+  domainNumber   Int
+  domain         ExamDomain                 @relation(fields: [domainNumber], references: [number])
+  title          String
+  considerations String // JSON string[]
+  order          Int
+  mappings       QuestionObjectiveMapping[]
+}
+
+model QuestionObjectiveMapping {
+  questionId    Int
+  question      CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  objectiveCode String
+  objective     ExamObjective     @relation(fields: [objectiveCode], references: [code])
+  role          String // primary | secondary
+
+  @@id([questionId, objectiveCode])
+}
+
+model TheoryConcept {
+  id                  String           @id
+  domainNumber        Int
+  objectiveCode       String
+  secondaryObjectives String           @default("[]")
+  category            String
+  name                String
+  description         String
+  priority            String // high | medium | low
+  guideStatus         String // explicit | prerequisite | supplementary
+  keywords            String           @default("[]")
+  order               Int
+  progress            TheoryProgress[]
+  questions           QuestionTopic[]
+}
+
+model QuestionTopic {
+  questionId   Int
+  question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  conceptId    String
+  concept      TheoryConcept     @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  score        Float
+  rank         Int
+  matchedTerms String            @default("[]")
+
+  @@id([questionId, conceptId])
+  @@index([conceptId])
+}
+
+// ---------------------------------------------------------------- users & sessions
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique // normalized (trimmed, lower-case); an identifier, not a verified identity
+  createdAt   DateTime  @default(now())
+  lastLoginAt DateTime  @default(now())
+  lastPath    String? // last portal location, for "continue where you left off"
+  lastPathAt  DateTime?
+
+  sessions   AuthSession[]
+  attempts   QuestionAttempt[]
+  flags      QuestionFlag[]
+  notes      QuestionNote[]
+  theory     TheoryProgress[]
+  practice   PracticeSession[]
+  studyTasks StudyTaskCompletion[]
+  settings   Setting[]
+}
+
+model AuthSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique // sha256 of the random cookie token; the token itself is never stored
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt  DateTime
+  userAgent  String?
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------- user activity (scoped by userId; never reset by imports)
+
+model TheoryProgress {
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conceptId       String
+  concept         TheoryConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  status          String        @default("not_started") // not_started | in_progress | completed
+  confidence      String? // low | medium | high
+  notes           String?
+  clientUpdatedAt DateTime? // client clock of the newest accepted write; older writes are ignored
+  updatedAt       DateTime      @updatedAt
+
+  @@id([userId, conceptId])
+  @@index([conceptId])
+}
+
+model QuestionAttempt {
+  id                  Int               @id @default(autoincrement())
+  userId              String
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId            String? // idempotency key from the browser, so retries never double-count
+  questionId          Int
+  question            CanonicalQuestion @relation(fields: [questionId], references: [id])
+  sessionId           String?
+  session             PracticeSession?  @relation(fields: [sessionId], references: [id])
+  mode                String // practice | mock | browse
+  selectedLabels      String // JSON
+  isCorrect           Boolean? // null when the answer was not gradable at the time
+  partial             Boolean           @default(false)
+  provisionalCorrect  Boolean?
+  verificationAtTime  String
+  correctLabelsAtTime String?
+  elapsedMs           Int               @default(0)
+  regraded            Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+
+  @@unique([userId, clientId])
+  @@index([userId, questionId, createdAt])
+  @@index([userId, createdAt])
+  @@index([questionId])
+}
+
+model QuestionFlag {
+  id              Int               @id @default(autoincrement())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questionId      Int
+  question        CanonicalQuestion @relation(fields: [questionId], references: [id])
+  kind            String // review | flag | bookmark
+  active          Boolean           @default(true) // cleared flags are kept inactive so stale "on" writes can be detected
+  reason          String?
+  clientUpdatedAt DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @default(now()) @updatedAt
+
+  @@unique([userId, questionId, kind])
+  @@index([userId, kind, active])
+  @@index([questionId])
+}
+
+model QuestionNote {
+  id              Int               @id @default(autoincrement())
+  userId          String
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId        String? // idempotency key for autosaved drafts
+  questionId      Int
+  question        CanonicalQuestion @relation(fields: [questionId], references: [id])
+  content         String
+  clientUpdatedAt DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([userId, clientId])
+  @@index([userId, questionId])
+  @@index([questionId])
+}
+
+model PracticeSession {
+  id                String            @id @default(cuid())
+  userId            String
+  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind              String // practice | mock
+  mode              String
+  title             String
+  config            String            @default("{}")
+  allocation        String? // mock domain allocation & shortfall disclosure
+  status            String            @default("active") // active | submitted | abandoned
+  immediateFeedback Boolean           @default(true)
+  timeLimitSec      Int?
+  deadlineAt        DateTime?
+  currentIndex      Int               @default(0)
+  results           String?
+  startedAt         DateTime          @default(now())
+  submittedAt       DateTime?
+  updatedAt         DateTime          @updatedAt
+  questions         SessionQuestion[]
+  attempts          QuestionAttempt[]
+
+  @@index([userId, kind, status])
+}
+
+model SessionQuestion {
+  id                 Int               @id @default(autoincrement())
+  sessionId          String
+  session            PracticeSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  questionId         Int
+  question           CanonicalQuestion @relation(fields: [questionId], references: [id])
+  order              Int
+  selectedLabels     String?
+  answeredAt         DateTime?
+  answerClientAt     DateTime? // client clock of the newest accepted answer write
+  markedInSession    Boolean           @default(false)
+  isCorrect          Boolean?
+  provisionalCorrect Boolean?
+  partial            Boolean           @default(false)
+  elapsedMs          Int               @default(0)
+
+  @@unique([sessionId, order])
+  @@unique([sessionId, questionId])
+  @@index([questionId])
+}
+
+model DuplicateCandidate {
+  id                Int       @id @default(autoincrement())
+  pairKey           String    @unique
+  aKey              String
+  bKey              String
+  stage             String // exact | fuzzy | semantic
+  score             Float
+  stemRatio         Float
+  optionSim         Float
+  cosine            Float?
+  numberMismatch    String    @default("[]")
+  answersAgree      Boolean   @default(false)
+  suggestedDecision String // auto_confirmed | auto_rejected | pending
+  reason            String
+  status            String // auto_confirmed | auto_rejected | pending | approved | rejected
+  previousStatus    String?
+  decidedAt         DateTime?
+  updatedAt         DateTime  @updatedAt
+}
+
+model ImportRun {
+  id         Int       @id @default(autoincrement())
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  status     String    @default("running")
+  summary    String    @default("{}")
+}
+
+model ImportIssue {
+  id         Int                @id @default(autoincrement())
+  issueKey   String             @unique
+  lastRunId  Int?
+  sourceKey  String?
+  questionId Int?
+  question   CanonicalQuestion? @relation(fields: [questionId], references: [id])
+  kind       String
+  severity   String // info | warning | error
+  message    String
+  status     String             @default("open") // open | resolved | ignored
+  resolution String?
+  active     Boolean            @default(true)
+  updatedAt  DateTime           @updatedAt
+}
+
+model StudyTaskCompletion {
+  id              Int       @id @default(autoincrement())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            String // YYYY-MM-DD local
+  taskKey         String
+  done            Boolean   @default(true)
+  clientUpdatedAt DateTime?
+  completedAt     DateTime  @default(now())
+
+  @@unique([userId, date, taskKey])
+}
+
+model Setting {
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key             String
+  value           String
+  clientUpdatedAt DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@id([userId, key])
+}

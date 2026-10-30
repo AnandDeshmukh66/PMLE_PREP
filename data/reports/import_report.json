@@ -1,0 +1,171 @@
+{
+ "generated_at": "2026-10-11T08:47:30.306723+00:00",
+ "sources": {
+  "pdf": {
+   "file": "ML_Engineer_Exam_Questions.pdf",
+   "pages": 173,
+   "declared_count": 338,
+   "extracted": 338,
+   "failed": 0,
+   "missing_question_numbers": [],
+   "missing_answer": 0,
+   "missing_options": 0,
+   "with_images": 0,
+   "references_missing_exhibit": 1,
+   "multi_select_incomplete": 5,
+   "explanations": 0
+  },
+  "examprepper": {
+   "url": "https://www.examprepper.co/exam/14/1",
+   "declared_count": 339,
+   "expected_pages": 68,
+   "captured_pages": 68,
+   "missing_pages": [],
+   "extracted": 339,
+   "failed": 0,
+   "missing_answer": 0,
+   "missing_options": 0,
+   "with_images": 8,
+   "image_failures": [],
+   "multi_select": 3,
+   "site_vs_examtopics_key_differs": 13,
+   "explanations": 0,
+   "access_notes": "Pages captured from a normal browser session at a throttled rate; the site returned HTTP 429 when requested faster, after which capture slowed to one page per ~12 s. No robots.txt is published (404)."
+  },
+  "guide": {
+   "url": "https://services.google.com/fh/files/misc/professional_machine_learning_engineer_exam_guide_english_new.pdf",
+   "domains": 6,
+   "objectives": 14,
+   "considerations": 52,
+   "weights": {
+    "1": 13,
+    "2": 16,
+    "3": 21,
+    "4": 20,
+    "5": 18,
+    "6": 13
+   },
+   "weights_sum": 101
+  }
+ },
+ "dedup": {
+  "pairs_total": 406,
+  "auto_confirmed_pairs": 338,
+  "pending_review_pairs": 0,
+  "by_stage": {
+   "exact": 309,
+   "fuzzy": 91,
+   "semantic": 6
+  },
+  "cross_source_clusters": 338,
+  "intra_source_duplicate_clusters": 0,
+  "canonical_estimate": 339,
+  "note": "Final counts are computed by the DB importer, which also applies user-approved/rejected merges."
+ },
+ "classification": {
+  "mapped": 673,
+  "unmapped": 4,
+  "low_confidence": 125,
+  "by_objective": {
+   "1.1": 79,
+   "1.2": 32,
+   "2.1": 109,
+   "2.2": 37,
+   "2.3": 60,
+   "3.1": 27,
+   "3.2": 51,
+   "3.3": 54,
+   "4.1": 67,
+   "4.2": 16,
+   "5.1": 42,
+   "5.2": 23,
+   "6.1": 29,
+   "6.2": 47,
+   "unmapped": 4
+  },
+  "alignment_bands": {
+   "strong": 155,
+   "moderate": 296,
+   "indirect": 190,
+   "direct": 8,
+   "weak": 28
+  },
+  "concepts_without_questions": [
+   "bqml-imported-remote",
+   "bqml-gemini-tuning",
+   "gemini-models",
+   "maas",
+   "prompt-engineering",
+   "tuning-vs-prompting",
+   "api-vs-custom",
+   "genai-cost-latency",
+   "genai-availability",
+   "eval-genai",
+   "deployment-strategy-choice",
+   "foundation-model-tuning",
+   "peft-lora",
+   "model-garden-deploy",
+   "feature-serving",
+   "genai-inference",
+   "serving-cost",
+   "model-rollback",
+   "prompt-injection",
+   "sensitive-data-llm",
+   "concept-drift"
+  ]
+ },
+ "legacy": {
+  "renamed_terminology": 350,
+  "renamed_service": 92,
+  "deprecated_feature": 32,
+  "current": 187,
+  "possibly_outdated": 16
+ },
+ "final": {
+  "pdfSourceQuestions": 338,
+  "websiteSourceQuestions": 339,
+  "confirmedOverlap": 338,
+  "uniqueQuestions": 339,
+  "pdfOnly": 0,
+  "websiteOnly": 1,
+  "identityHolds": true,
+  "intraSourceMerged": 0,
+  "withImages": 8,
+  "multiSelect": 5,
+  "byVerification": {
+   "conflict": 28,
+   "contested": 21,
+   "source_key": 6,
+   "verified": 284
+  },
+  "byLegacy": {
+   "current": 94,
+   "deprecated_feature": 16,
+   "possibly_outdated": 8,
+   "renamed_service": 46,
+   "renamed_terminology": 175
+  },
+  "byDomain": {
+   "1": 56,
+   "2": 103,
+   "3": 67,
+   "4": 41,
+   "5": 32,
+   "6": 38,
+   "unmapped": 2
+  },
+  "duplicateCandidates": {
+   "auto_confirmed": 338,
+   "auto_rejected": 68
+  },
+  "openReviewItems": 143
+ },
+ "rebuild": {
+  "groups": 339,
+  "created": 0,
+  "merged": 0,
+  "retired": 0,
+  "rebuilt": 339
+ },
+ "import_run": 4
+}
