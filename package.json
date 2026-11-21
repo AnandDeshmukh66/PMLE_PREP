@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "postinstall": "node scripts/db.mjs generate",
-    "setup": "node scripts/db.mjs migrate deploy && node scripts/db.mjs generate && npm run ingest:db",
+    "setup": "node scripts/db.mjs migrate deploy && node scripts/db.mjs generate && tsx scripts/import-db.ts --publish",
     "db:migrate": "node scripts/db.mjs migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:generate": "node scripts/db.mjs generate",
@@ -21,9 +21,12 @@
     "backup": "tsx scripts/backup-db.ts",
     "ingest:python": "../.venv/bin/python scripts/pipeline.py",
     "ingest:db": "tsx scripts/import-db.ts",
-    "ingest": "npm run ingest:python && npm run ingest:db"
+    "ingest": "npm run ingest:python && npm run ingest:db",
+    "ingest:worker": "tsx scripts/ingest-worker.ts"
   },
   "dependencies": {
+    "@neon/config": "^1.11.3",
+    "@neon/env": "^1.6.15",
     "@prisma/client": "6.19.3",
     "clsx": "^2.1.1",
     "lucide-react": "^0.546.0",

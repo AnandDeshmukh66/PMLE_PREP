@@ -6,14 +6,18 @@ import { z } from "zod";
 import { type Ack, invalid, notFound, UNAUTHENTICATED } from "./ack";
 import { type CurrentUser, getCurrentUser, requireAdmin, requireUser } from "./auth";
 import { rebuildCanonicals, recomputeVerification } from "./canonicalize";
+import { assertVisibleVersion, NotVisibleError, publishedVersionId, visibleQuestion } from "./cert";
+import { LEGACY_PMLE_SLUG, LEGACY_PMLE_VERSION_ID, LOCATION_RE } from "./cert-rules";
 import { prisma } from "./db";
 import { gradeAnswer, type Outcome } from "./grading";
 import { parseJson, sortedLabels } from "./json";
 import { submitMockSession } from "./mock";
 import { loadQuestionRows } from "./questions";
+import { refreshReviewQueue } from "./review-queue";
 import { selectMock, selectPractice, type PracticeConfig, PRACTICE_MODES } from "./selection";
 import { getSettings, SETTINGS_SCHEMA, type Settings } from "./settings";
 import { isGradable } from "./verification";
+import { assertEditable, refreshVersionStats } from "./versions";
 
 function refreshAll() {
   revalidatePath("/", "layout");
@@ -25,6 +29,9 @@ const Rev = z.number().int().positive().max(8.64e15);
 const ClientId = z.string().min(8).max(64).regex(/^[\w-]+$/);
 const QuestionId = z.number().int().positive();
 const Labels = z.array(z.string().regex(/^[A-H]$/)).max(8);
+const CertSlug = z.string().min(3).max(40).regex(/^[a-z0-9-]+$/);
+/** Older clients (and queued offline writes) did not send a version; they always meant PMLE 2026. */
+const VersionRef = z.string().min(1).max(40).regex(/^[\w-]+$/).default(LEGACY_PMLE_VERSION_ID);
 
 const isUniqueViolation = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 
@@ -41,6 +48,7 @@ async function sync<S extends z.ZodType, T extends object>(schema: S, input: unk
     return await fn(user, parsed.data);
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && (e.code === "P2003" || e.code === "P2025")) return notFound();
+    if (e instanceof NotVisibleError) return notFound(e.message);
     throw e;
   }
 }
@@ -86,8 +94,8 @@ const AnswerInput = z.object({
 export async function submitAnswer(input: z.input<typeof AnswerInput>): Promise<Ack<SubmitResult>> {
   return sync(AnswerInput, input, async (user, d) => {
     const selected = sortedLabels(d.selected);
-    const [settings, q] = await Promise.all([getSettings(user.id), prisma.canonicalQuestion.findUnique({ where: { id: d.questionId } })]);
-    if (!q) return notFound("Question not found.");
+    const [settings, q] = await Promise.all([getSettings(user.id), prisma.canonicalQuestion.findUnique({ where: { id: d.questionId }, include: { version: { select: { status: true } } } })]);
+    if (!q || (q.version.status !== "published" && q.version.status !== "archived")) return notFound("Question not found.");
     const correct = parseJson<string[] | null>(q.correctLabels, null);
     const provisional = parseJson<string[] | null>(q.provisionalLabels, null);
     const gradable = isGradable(q.verification, settings.gradeContested) && !!correct;
@@ -148,6 +156,7 @@ export type FlagState = { on: boolean; reason: string | null };
 
 export async function syncFlag(input: z.input<typeof FlagInput>): Promise<Ack<{ stale?: boolean; current?: FlagState }>> {
   return sync(FlagInput, input, async (user, d) => {
+    await visibleQuestion(d.questionId);
     const at = new Date(d.rev);
     const key = { userId: user.id, questionId: d.questionId, kind: d.kind };
     const data = { active: d.on, clientUpdatedAt: at, ...(d.reason !== undefined ? { reason: d.reason?.trim() || null } : {}) };
@@ -194,6 +203,7 @@ export async function saveNote(input: z.input<typeof NoteInput>): Promise<Ack<{ 
       return { ok: true, id: null };
     }
     if (!note) {
+      await visibleQuestion(d.questionId);
       try {
         note = await prisma.questionNote.create({ data: { userId: user.id, clientId: d.clientId ?? null, questionId: d.questionId, content, clientUpdatedAt: at } });
         return { ok: true, id: note.id };
@@ -223,6 +233,7 @@ export async function deleteNote(input: z.input<typeof NoteRef>): Promise<Ack> {
 // ---------------------------------------------------------------- theory
 
 const TheoryInput = z.object({
+  versionId: VersionRef,
   conceptId: z.string().min(1).max(80),
   patch: z
     .object({ status: z.enum(["not_started", "in_progress", "completed"]).optional(), confidence: z.enum(["low", "medium", "high"]).nullable().optional(), notes: z.string().max(5000).nullable().optional() })
@@ -233,16 +244,17 @@ export type TheoryState = { status: string; confidence: string | null; notes: st
 
 export async function syncTheory(input: z.input<typeof TheoryInput>): Promise<Ack<{ stale?: boolean; current?: TheoryState }>> {
   return sync(TheoryInput, input, async (user, d) => {
+    await assertVisibleVersion(d.versionId);
     const at = new Date(d.rev);
-    const key = { userId: user.id, conceptId: d.conceptId };
+    const key = { userId: user.id, versionId: d.versionId, conceptId: d.conceptId };
     const data = { ...d.patch, ...(d.patch.notes !== undefined ? { notes: d.patch.notes?.trim() ? d.patch.notes : null } : {}), clientUpdatedAt: at };
     const applied = await guardedWrite(
       () => prisma.theoryProgress.updateMany({ where: { ...key, OR: olderThan(at) }, data }),
       () => prisma.theoryProgress.create({ data: { ...key, ...data } }),
-      async () => !!(await prisma.theoryProgress.findUnique({ where: { userId_conceptId: key }, select: { status: true } })),
+      async () => !!(await prisma.theoryProgress.findUnique({ where: { userId_versionId_conceptId: key }, select: { status: true } })),
     );
     if (!applied) {
-      const cur = await prisma.theoryProgress.findUniqueOrThrow({ where: { userId_conceptId: key } });
+      const cur = await prisma.theoryProgress.findUniqueOrThrow({ where: { userId_versionId_conceptId: key } });
       return { ok: true, stale: true, current: { status: cur.status, confidence: cur.confidence, notes: cur.notes } };
     }
     return { ok: true };
@@ -272,26 +284,35 @@ export async function syncSettings(input: z.input<typeof SettingsInput>): Promis
   });
 }
 
-const TaskInput = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), taskKey: z.string().min(1).max(120), done: z.boolean(), rev: Rev });
+const TaskInput = z.object({ versionId: VersionRef, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), taskKey: z.string().min(1).max(120), done: z.boolean(), rev: Rev });
 
 export async function syncStudyTask(input: z.input<typeof TaskInput>): Promise<Ack<{ stale?: boolean; current?: { done: boolean } }>> {
   return sync(TaskInput, input, async (user, d) => {
     const at = new Date(d.rev);
-    const key = { userId: user.id, date: d.date, taskKey: d.taskKey };
+    await assertVisibleVersion(d.versionId);
+    const key = { userId: user.id, versionId: d.versionId, date: d.date, taskKey: d.taskKey };
     const applied = await guardedWrite(
       () => prisma.studyTaskCompletion.updateMany({ where: { ...key, OR: olderThan(at) }, data: { done: d.done, clientUpdatedAt: at, completedAt: new Date() } }),
       () => prisma.studyTaskCompletion.create({ data: { ...key, done: d.done, clientUpdatedAt: at } }),
-      async () => !!(await prisma.studyTaskCompletion.findUnique({ where: { userId_date_taskKey: key }, select: { id: true } })),
+      async () => !!(await prisma.studyTaskCompletion.findUnique({ where: { userId_versionId_date_taskKey: key }, select: { id: true } })),
     );
     if (!applied) {
-      const cur = await prisma.studyTaskCompletion.findUniqueOrThrow({ where: { userId_date_taskKey: key } });
+      const cur = await prisma.studyTaskCompletion.findUniqueOrThrow({ where: { userId_versionId_date_taskKey: key } });
       return { ok: true, stale: true, current: { done: cur.done } };
     }
     return { ok: true };
   });
 }
 
-const LocationInput = z.object({ path: z.string().min(1).max(300).regex(/^\/(questions|practice|mock|theory)\b[^\s]*$/) });
+const LEGACY_LOCATION_RE = /^\/(questions|practice|mock|theory)\b[^\s]*$/;
+const LocationInput = z.object({
+  path: z
+    .string()
+    .min(1)
+    .max(300)
+    .transform((p) => (LEGACY_LOCATION_RE.test(p) ? `/c/${LEGACY_PMLE_SLUG}${p}` : p))
+    .pipe(z.string().regex(LOCATION_RE)),
+});
 
 /** Remembers the last study page so the dashboard can offer "continue where you left off". */
 export async function recordLocation(input: z.input<typeof LocationInput>): Promise<Ack> {
@@ -310,22 +331,23 @@ const PracticeInput = z.object({
   immediateFeedback: z.boolean(),
   includeAttempted: z.boolean(),
   includeUnverified: z.boolean(),
-  domains: z.array(z.number().int().min(1).max(6)).max(6).optional(),
+  domains: z.array(z.number().int().min(1).max(20)).max(20).optional(),
   concepts: z.array(z.string().max(80)).max(200).optional(),
   seed: z.number().int().optional(),
 });
 
-export async function createPracticeSession(input: PracticeConfig): Promise<{ id: string | null; note: string | null; poolSize: number }> {
+export async function createPracticeSession(cert: string, input: PracticeConfig): Promise<{ id: string | null; note: string | null; poolSize: number }> {
   const user = await requireUser();
+  const versionId = await publishedVersionId(CertSlug.parse(cert));
   const cfg = PracticeInput.parse(input);
-  const rows = await loadQuestionRows(user.id);
+  const rows = await loadQuestionRows(user.id, versionId);
   const seed = cfg.seed ?? Math.floor(Math.random() * 2 ** 31);
   const { ids, note, poolSize } = selectPractice(rows, { ...cfg, seed });
   if (!poolSize || !ids.length) return { id: null, note: note ?? "No questions match this configuration.", poolSize: 0 };
   const title = `${PRACTICE_MODES[cfg.mode].title}${cfg.domains?.length ? ` · Domain ${cfg.domains.join(", ")}` : ""}`;
   const s = await prisma.$transaction(async (tx) => {
     const session = await tx.practiceSession.create({
-      data: { userId: user.id, kind: "practice", mode: cfg.mode, title, config: JSON.stringify({ ...cfg, seed, note }), immediateFeedback: cfg.immediateFeedback },
+      data: { userId: user.id, versionId, kind: "practice", mode: cfg.mode, title, config: JSON.stringify({ ...cfg, seed, note }), immediateFeedback: cfg.immediateFeedback },
     });
     await tx.sessionQuestion.createMany({ data: ids.map((questionId, order) => ({ sessionId: session.id, questionId, order })) });
     return session;
@@ -360,11 +382,12 @@ export async function abandonSession(sessionId: string) {
 
 const MockOverrides = SETTINGS_SCHEMA.pick({ mockQuestions: true, mockMinutes: true, mockFallback: true, mockExcludeLegacy: true, mockOnlyGradable: true });
 
-export async function createMockExam(overrides?: Partial<Pick<Settings, "mockQuestions" | "mockMinutes" | "mockFallback" | "mockExcludeLegacy" | "mockOnlyGradable">>): Promise<{ id: string | null; error?: string }> {
+export async function createMockExam(cert: string, overrides?: Partial<Pick<Settings, "mockQuestions" | "mockMinutes" | "mockFallback" | "mockExcludeLegacy" | "mockOnlyGradable">>): Promise<{ id: string | null; error?: string }> {
   const user = await requireUser();
+  const versionId = await publishedVersionId(CertSlug.parse(cert));
   const settings = { ...(await getSettings(user.id)), ...MockOverrides.parse(overrides ?? {}) };
-  const rows = await loadQuestionRows(user.id);
-  const domains = await prisma.examDomain.findMany({ orderBy: { number: "asc" } });
+  const rows = await loadQuestionRows(user.id, versionId);
+  const domains = await prisma.examDomain.findMany({ where: { versionId }, orderBy: { number: "asc" } });
   const seed = Math.floor(Math.random() * 2 ** 31);
   const { ids, plan } = selectMock(
     rows,
@@ -378,6 +401,7 @@ export async function createMockExam(overrides?: Partial<Pick<Settings, "mockQue
     const session = await tx.practiceSession.create({
       data: {
         userId: user.id,
+        versionId,
         startedAt,
         kind: "mock",
         mode: "mock",
@@ -434,11 +458,18 @@ export async function submitMock(sessionId: string, auto = false) {
   return r;
 }
 
-// ---------------------------------------------------------------- shared question bank (administrators only)
+// ---------------------------------------------------------------- shared question bank (administrators, drafts only)
+// Published versions are immutable; these edits apply to a draft and reach learners when it is published.
 
-export async function decideDuplicate(pairKey: string, action: "approve" | "reject" | "undo") {
+const VersionId = z.string().min(1).max(40);
+const PairKey = z.string().min(3).max(300);
+
+export async function decideDuplicate(versionId: string, pairKey: string, action: "approve" | "reject" | "undo") {
   await requireAdmin();
-  const c = await prisma.duplicateCandidate.findUniqueOrThrow({ where: { pairKey } });
+  const vid = VersionId.parse(versionId);
+  await assertEditable(prisma, vid);
+  const where = { versionId_pairKey: { versionId: vid, pairKey: PairKey.parse(pairKey) } };
+  const c = await prisma.duplicateCandidate.findUniqueOrThrow({ where });
   let status = c.status;
   let previousStatus = c.previousStatus;
   if (action === "approve") {
@@ -451,41 +482,37 @@ export async function decideDuplicate(pairKey: string, action: "approve" | "reje
     status = c.previousStatus ?? c.suggestedDecision;
     previousStatus = null;
   }
-  await prisma.duplicateCandidate.update({ where: { pairKey }, data: { status, previousStatus, decidedAt: new Date() } });
-  const summary = await rebuildCanonicals(prisma, { onlyChanged: true });
-  if (status === "approved" || status === "rejected") {
-    await prisma.importIssue.updateMany({ where: { issueKey: `dup:${pairKey}` }, data: { status: "resolved", resolution: status } });
-  }
+  await prisma.duplicateCandidate.update({ where, data: { status, previousStatus, decidedAt: new Date() } });
+  const summary = await rebuildCanonicals(prisma, { versionId: vid, onlyChanged: true });
+  await prisma.importIssue.updateMany({
+    where: { versionId: vid, issueKey: `dup:${c.pairKey}` },
+    data: status === "approved" || status === "rejected" ? { status: "resolved", resolution: status } : { status: "open", resolution: null },
+  });
+  await refreshVersionStats(prisma, vid, { hashes: true });
   refreshAll();
   return summary;
 }
 
-/** Resolving an answer changes grading for everyone, so earlier ungraded attempts of all users are regraded. */
+/** Sets the reviewer's answer for a draft question (a user_override claim), recomputing its verification. */
 export async function resolveAnswer(questionId: number, labels: string[] | null, note?: string) {
-  const admin = await requireAdmin();
-  const q = await prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: questionId } });
-  const settings = await getSettings(admin.id);
+  await requireAdmin();
+  const q = await prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: QuestionId.parse(questionId) } });
+  await assertEditable(prisma, q.versionId);
+  const claimKey = `user_override:${questionId}`;
   await prisma.$transaction(async (tx) => {
     if (labels && labels.length) {
       const l = sortedLabels(Labels.parse(labels));
       await tx.answerClaim.upsert({
-        where: { claimKey: `user_override:${questionId}` },
-        create: { claimKey: `user_override:${questionId}`, questionId, kind: "user_override", labels: JSON.stringify(l), sourceLabels: JSON.stringify(l), createdBy: "user" },
+        where: { versionId_claimKey: { versionId: q.versionId, claimKey } },
+        create: { versionId: q.versionId, claimKey, questionId, kind: "user_override", labels: JSON.stringify(l), sourceLabels: JSON.stringify(l), createdBy: "user" },
         update: { labels: JSON.stringify(l), sourceLabels: JSON.stringify(l) },
       });
     } else {
-      await tx.answerClaim.deleteMany({ where: { claimKey: `user_override:${questionId}` } });
+      await tx.answerClaim.deleteMany({ where: { versionId: q.versionId, claimKey } });
     }
-    const v = await recomputeVerification(tx, questionId);
-    if (isGradable(v.status, settings.gradeContested) && v.correct) {
-      const ungraded = await tx.questionAttempt.findMany({ where: { questionId, isCorrect: null } });
-      for (const a of ungraded) {
-        const g = gradeAnswer(parseJson<string[]>(a.selectedLabels, []), v.correct, v.provisional, true);
-        await tx.questionAttempt.update({ where: { id: a.id }, data: { isCorrect: g.isCorrect, partial: g.partial, regraded: true, correctLabelsAtTime: JSON.stringify(v.correct) } });
-      }
-    }
+    await recomputeVerification(tx, questionId);
     await tx.importIssue.updateMany({
-      where: { questionId, kind: { in: ["answer_conflict", "answer_contested", "missing_answer"] } },
+      where: { versionId: q.versionId, questionId, kind: { in: ["answer_conflict", "answer_contested", "missing_answer"] } },
       data: labels && labels.length ? { status: "resolved", resolution: `Resolved to ${sortedLabels(labels).join(", ")}${note ? `: ${note.slice(0, 500)}` : ""}` } : { status: "open", resolution: null },
     });
   });
@@ -493,23 +520,43 @@ export async function resolveAnswer(questionId: number, labels: string[] | null,
   return q.code;
 }
 
-export async function setIssueStatus(issueKey: string, status: "open" | "resolved" | "ignored", resolution?: string) {
+export async function setIssueStatus(versionId: string, issueKey: string, status: "open" | "resolved" | "ignored", resolution?: string) {
   await requireAdmin();
-  await prisma.importIssue.update({ where: { issueKey }, data: { status: z.enum(["open", "resolved", "ignored"]).parse(status), resolution: resolution?.slice(0, 500) ?? null } });
+  const vid = VersionId.parse(versionId);
+  await assertEditable(prisma, vid);
+  await prisma.importIssue.update({
+    where: { versionId_issueKey: { versionId: vid, issueKey: z.string().min(1).max(400).parse(issueKey) } },
+    data: { status: z.enum(["open", "resolved", "ignored"]).parse(status), resolution: resolution?.slice(0, 500) ?? null },
+  });
   refreshAll();
 }
 
 export async function setManualClassification(questionId: number, objectiveCode: string) {
   await requireAdmin();
-  const obj = await prisma.examObjective.findUniqueOrThrow({ where: { code: objectiveCode } });
+  const q = await prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: QuestionId.parse(questionId) }, select: { versionId: true } });
+  await assertEditable(prisma, q.versionId);
+  const obj = await prisma.examObjective.findUniqueOrThrow({ where: { versionId_code: { versionId: q.versionId, code: z.string().max(10).parse(objectiveCode) } } });
   await prisma.$transaction(async (tx) => {
     await tx.canonicalQuestion.update({
       where: { id: questionId },
       data: { objectiveCode, domainNumber: obj.domainNumber, classificationStatus: "manual", classificationConfidence: "high", classificationExplanation: `Manually classified to objective ${objectiveCode}.` },
     });
     await tx.questionObjectiveMapping.deleteMany({ where: { questionId } });
-    await tx.questionObjectiveMapping.create({ data: { questionId, objectiveCode, role: "primary" } });
-    await tx.importIssue.updateMany({ where: { questionId, kind: { in: ["classification_unmapped", "classification_low_confidence"] } }, data: { status: "resolved", resolution: `Manually set to ${objectiveCode}` } });
+    await tx.questionObjectiveMapping.create({ data: { versionId: q.versionId, questionId, objectiveCode, role: "primary" } });
+    await tx.importIssue.updateMany({ where: { versionId: q.versionId, questionId, kind: { in: ["classification_unmapped", "classification_low_confidence"] } }, data: { status: "resolved", resolution: `Manually set to ${objectiveCode}` } });
   });
   refreshAll();
+}
+
+/** Excludes (or restores) a source occurrence in a draft: excluded occurrences form no question and are not published. */
+export async function setOccurrenceExcluded(versionId: string, sourceKey: string, excluded: boolean) {
+  await requireAdmin();
+  const vid = VersionId.parse(versionId);
+  await assertEditable(prisma, vid);
+  await prisma.sourceOccurrence.update({ where: { versionId_sourceKey: { versionId: vid, sourceKey: z.string().min(1).max(200).parse(sourceKey) } }, data: { excluded: z.boolean().parse(excluded) } });
+  const summary = await rebuildCanonicals(prisma, { versionId: vid, onlyChanged: true });
+  await refreshReviewQueue(prisma, vid);
+  await refreshVersionStats(prisma, vid, { hashes: true });
+  refreshAll();
+  return summary;
 }

@@ -40,20 +40,13 @@ export function relTime(d: Date | string | null | undefined): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-export const DOMAIN_SHORT: Record<number, string> = {
-  1: "Low-code AI",
-  2: "Data & models",
-  3: "Scaling prototypes",
-  4: "Serving & scaling",
-  5: "Pipelines & MLOps",
-  6: "Monitoring AI",
-};
+const DOMAIN_PALETTE = ["#6b8cff", "#8f7bff", "#34d1b6", "#f2b84b", "#5fb3f9", "#f2706f", "#7fd17a", "#e58fd3"];
 
-export const DOMAIN_COLOR: Record<number, string> = {
-  1: "#6b8cff",
-  2: "#8f7bff",
-  3: "#34d1b6",
-  4: "#f2b84b",
-  5: "#5fb3f9",
-  6: "#f2706f",
-};
+/** Stable color per exam domain number (any certification). */
+export const domainColor = (n: number | null | undefined) => DOMAIN_PALETTE[(((n ?? 1) - 1) % DOMAIN_PALETTE.length + DOMAIN_PALETTE.length) % DOMAIN_PALETTE.length];
+
+/** Compact label for a domain title from the exam guide. */
+export function domainShort(title: string | undefined | null, max = 34): string {
+  if (!title) return "";
+  return title.length > max ? `${title.slice(0, max - 1).trimEnd()}…` : title;
+}

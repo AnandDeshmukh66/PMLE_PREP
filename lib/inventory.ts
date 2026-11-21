@@ -1,32 +1,59 @@
 import type { PrismaClient } from "@prisma/client";
 
-export async function computeInventory(db: PrismaClient) {
-  const [pdf, ep, active, common, pdfOnly, epOnly, multiPdf, multiEp] = await Promise.all([
-    db.sourceOccurrence.count({ where: { sourceId: "pdf" } }),
-    db.sourceOccurrence.count({ where: { sourceId: "examprepper" } }),
-    db.canonicalQuestion.count({ where: { active: true } }),
-    db.canonicalQuestion.count({ where: { active: true, isCommon: true } }),
-    db.canonicalQuestion.count({ where: { active: true, inPdf: true, inExamprepper: false } }),
-    db.canonicalQuestion.count({ where: { active: true, inPdf: false, inExamprepper: true } }),
-    db.sourceOccurrence.groupBy({ by: ["canonicalId"], where: { sourceId: "pdf", canonicalId: { not: null } }, _count: { _all: true } }),
-    db.sourceOccurrence.groupBy({ by: ["canonicalId"], where: { sourceId: "examprepper", canonicalId: { not: null } }, _count: { _all: true } }),
+/** Content inventory of one version: per-source counts, overlap identity, verification and review status. */
+export async function computeInventory(db: PrismaClient, versionId: string) {
+  const [sources, occs, active] = await Promise.all([
+    db.questionSource.findMany({ where: { versionId }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] }),
+    db.sourceOccurrence.findMany({ where: { versionId, excluded: false, canonicalId: { not: null } }, select: { canonicalId: true, sourceId: true, canonical: { select: { active: true } } } }),
+    db.canonicalQuestion.count({ where: { versionId, active: true } }),
   ]);
-  const byVerification = await db.canonicalQuestion.groupBy({ by: ["verification"], where: { active: true }, _count: true });
-  const byLegacy = await db.canonicalQuestion.groupBy({ by: ["legacyStatus"], where: { active: true }, _count: true });
-  const byDomain = await db.canonicalQuestion.groupBy({ by: ["domainNumber"], where: { active: true }, _count: true });
-  const withImages = await db.canonicalQuestion.count({ where: { active: true, hasImages: true } });
-  const multiSelect = await db.canonicalQuestion.count({ where: { active: true, multiSelect: true } });
-  const dup = await db.duplicateCandidate.groupBy({ by: ["status"], _count: true });
-  const openIssues = await db.importIssue.count({ where: { active: true, status: "open" } });
-  const intraSourceMerged = multiPdf.filter((g) => g._count._all > 1).length + multiEp.filter((g) => g._count._all > 1).length;
+  const kindOf = new Map(sources.map((s) => [s.id, s.kind]));
+  const bySource: Record<string, number> = Object.fromEntries(sources.map((s) => [s.id, 0]));
+  const members = new Map<number, string[]>();
+  for (const o of occs) {
+    if (!o.canonical?.active) continue;
+    bySource[o.sourceId] = (bySource[o.sourceId] ?? 0) + 1;
+    (members.get(o.canonicalId!) ?? members.set(o.canonicalId!, []).get(o.canonicalId!)!).push(o.sourceId);
+  }
+  let common = 0;
+  let intraSourceMerged = 0;
+  let pdfOnly = 0;
+  let websiteOnly = 0;
+  const onlyIn: Record<string, number> = {};
+  for (const ms of members.values()) {
+    const distinct = new Set(ms);
+    if (distinct.size >= 2) common++;
+    if (distinct.size < ms.length) intraSourceMerged++;
+    if (distinct.size === 1) {
+      const sid = ms[0];
+      onlyIn[sid] = (onlyIn[sid] ?? 0) + 1;
+      if (kindOf.get(sid) === "pdf") pdfOnly++;
+      else if (kindOf.get(sid) === "website") websiteOnly++;
+    }
+  }
+  const total = Object.values(bySource).reduce((a, b) => a + b, 0);
+  const sumKind = (k: string) => sources.filter((s) => s.kind === k).reduce((a, s) => a + (bySource[s.id] ?? 0), 0);
+  const [byVerification, byLegacy, byDomain, withImages, multiSelect, dup, openIssues] = await Promise.all([
+    db.canonicalQuestion.groupBy({ by: ["verification"], where: { versionId, active: true }, _count: true }),
+    db.canonicalQuestion.groupBy({ by: ["legacyStatus"], where: { versionId, active: true }, _count: true }),
+    db.canonicalQuestion.groupBy({ by: ["domainNumber"], where: { versionId, active: true }, _count: true }),
+    db.canonicalQuestion.count({ where: { versionId, active: true, hasImages: true } }),
+    db.canonicalQuestion.count({ where: { versionId, active: true, multiSelect: true } }),
+    db.duplicateCandidate.groupBy({ by: ["status"], where: { versionId }, _count: true }),
+    db.importIssue.count({ where: { versionId, active: true, status: "open" } }),
+  ]);
+  const distinctTotal = [...members.values()].reduce((a, ms) => a + new Set(ms).size, 0);
   return {
-    pdfSourceQuestions: pdf,
-    websiteSourceQuestions: ep,
+    sources: sources.map((s) => ({ ...s, occurrences: bySource[s.id] ?? 0, only: onlyIn[s.id] ?? 0 })),
+    sourceOccurrences: total,
+    pdfSourceQuestions: sumKind("pdf"),
+    websiteSourceQuestions: sumKind("website"),
     confirmedOverlap: common,
     uniqueQuestions: active,
     pdfOnly,
-    websiteOnly: epOnly,
-    identityHolds: pdf + ep - common === active,
+    websiteOnly,
+    /** Every occurrence is in exactly one active question and no question has two occurrences from one source. */
+    identityHolds: intraSourceMerged === 0 && distinctTotal === total && members.size === active,
     intraSourceMerged,
     withImages,
     multiSelect,

@@ -6,7 +6,7 @@ import { freshDbUrl } from "../integration/helpers";
 async function main() {
   const url = freshDbUrl("e2e");
   const db = new PrismaClient({ datasourceUrl: url });
-  await importBank(db, undefined, { writeReport: false });
+  await importBank(db, undefined, { writeReport: false, publish: true });
   await db.$disconnect();
   console.log("e2e database ready");
 }

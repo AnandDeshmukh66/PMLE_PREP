@@ -1,21 +1,25 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { requireUser } from "./auth";
+import { publishedVersionId } from "./cert";
 import { prisma } from "./db";
-import { parseFilters, scopeFromParam, SCOPES } from "./filters";
-import { filterRows, loadQuestionRows } from "./questions";
+import { parseFilters, scopeFromParam, scopeMeta } from "./filters";
+import { filterRows, loadQuestionRows, versionSources } from "./questions";
 import { getSettings } from "./settings";
 import { shuffleSeeded } from "./selection";
 
 /** Start a practice session from exactly the questions in a filtered list view (max 50). */
-export async function createPracticeFromList(scopeParam: string, query: string): Promise<{ id: string | null; note: string | null }> {
+export async function createPracticeFromList(cert: string, scopeParam: string, query: string): Promise<{ id: string | null; note: string | null }> {
   const user = await requireUser();
+  const versionId = await publishedVersionId(z.string().min(3).max(40).regex(/^[a-z0-9-]+$/).parse(cert));
   const scope = scopeFromParam(String(scopeParam).slice(0, 40));
   const q = String(query).slice(0, 2000);
   const filters = parseFilters(new URLSearchParams(q));
   const settings = await getSettings(user.id);
-  const rows = filterRows(await loadQuestionRows(user.id), scope, filters);
+  const rows = filterRows(await loadQuestionRows(user.id, versionId), scope, filters);
+  const sources = await versionSources(versionId);
   if (!rows.length) return { id: null, note: "This list is empty." };
   const seed = Math.floor(Math.random() * 2 ** 31);
   const ordered = settings.shuffle ? shuffleSeeded(rows, seed) : rows;
@@ -24,9 +28,10 @@ export async function createPracticeFromList(scopeParam: string, query: string):
     const session = await tx.practiceSession.create({
       data: {
         userId: user.id,
+        versionId,
         kind: "practice",
         mode: "custom",
-        title: `${SCOPES[scope].title}${q ? " (filtered)" : ""}`,
+        title: `${scopeMeta(scope, sources).title}${q ? " (filtered)" : ""}`,
         config: JSON.stringify({ mode: "custom", scope, query: q, seed, count: ids.length, immediateFeedback: settings.immediateFeedback }),
         immediateFeedback: settings.immediateFeedback,
       },

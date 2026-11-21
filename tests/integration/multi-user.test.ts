@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import type { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type Jar, setRequestHeaders } from "../stubs/next-headers";
 import { RedirectSignal } from "../stubs/next-navigation";
-import { freshDbUrl } from "./helpers";
+import { LEGACY_PMLE_VERSION_ID as V } from "@/lib/cert-rules";
+import { freshDbUrl, PG_URL } from "./helpers";
 import { ADMIN, as, cid, configureAuthEnv, login, ok, rev, TEST_DOMAIN } from "./session";
 
 type Mods = {
@@ -47,8 +49,8 @@ beforeAll(async () => {
     adminBackupRoute: await import("@/app/api/backup/route"),
   };
   const { importBank } = await import("../../scripts/import-db");
-  await importBank(prisma, undefined, { writeReport: false });
-  qs = await prisma.canonicalQuestion.findMany({ where: { active: true, verification: "verified", multiSelect: false }, orderBy: { code: "asc" }, take: 6, select: { id: true, code: true, correctLabels: true } });
+  await importBank(prisma, undefined, { writeReport: false, publish: true });
+  qs = await prisma.canonicalQuestion.findMany({ where: { versionId: V, active: true, verification: "verified", multiSelect: false }, orderBy: { code: "asc" }, take: 6, select: { id: true, code: true, correctLabels: true } });
 });
 
 afterAll(async () => {
@@ -87,7 +89,7 @@ describe("email sign-in", () => {
     const again = await login(`  Alice@${TEST_DOMAIN.toUpperCase()} `);
     expect(await m.prisma.user.count({ where: { email: ALICE } })).toBe(1);
     expect((await m.auth.getCurrentUser())!.id).toBe(aliceId);
-    const rows = await m.questions.loadQuestionRows(aliceId);
+    const rows = await m.questions.loadQuestionRows(aliceId, V);
     expect(rows.find((r) => r.id === qs[0].id)!.bookmarked).toBe(true);
     alice = again.jar;
   });
@@ -117,7 +119,7 @@ describe("email sign-in", () => {
     expect(await m.auth.getCurrentUser()).toBeNull();
     expect(await m.prisma.authSession.findUnique({ where: { id: tokenSessions[0].id } })).toBeNull();
     expect(await m.actions.syncFlag({ questionId: qs[0].id, kind: "flag", on: true, rev: rev() })).toMatchObject({ ok: false, code: "UNAUTHENTICATED" });
-    await expect(m.actions.createPracticeSession({ mode: "all", count: 5, shuffle: true, immediateFeedback: true, includeAttempted: true, includeUnverified: true })).rejects.toBeInstanceOf(RedirectSignal);
+    await expect(m.actions.createPracticeSession("pmle", { mode: "all", count: 5, shuffle: true, immediateFeedback: true, includeAttempted: true, includeUnverified: true })).rejects.toBeInstanceOf(RedirectSignal);
   });
 
   it("logout deletes the session, clears the cookie and the old token stops working", async () => {
@@ -136,7 +138,7 @@ describe("email sign-in", () => {
   it("restricts shared question-bank changes to administrators", async () => {
     as(alice);
     const pair = await m.prisma.duplicateCandidate.findFirstOrThrow();
-    await expect(m.actions.decideDuplicate(pair.pairKey, "reject")).rejects.toBeInstanceOf(m.auth.ForbiddenError);
+    await expect(m.actions.decideDuplicate(pair.versionId, pair.pairKey, "reject")).rejects.toBeInstanceOf(m.auth.ForbiddenError);
     await expect(m.actions.resolveAnswer(qs[0].id, ["A"])).rejects.toBeInstanceOf(m.auth.ForbiddenError);
     await login(ADMIN);
     expect((await m.auth.getCurrentUser())!.isAdmin).toBe(true);
@@ -148,45 +150,45 @@ describe("two users, one question bank, independent progress", () => {
     bob = (await login(BOB)).jar;
     bobId = (await m.prisma.user.findUniqueOrThrow({ where: { email: BOB } })).id;
     const q = qs[1];
-    const concept = await m.prisma.theoryConcept.findFirstOrThrow({ orderBy: { id: "asc" } });
+    const concept = await m.prisma.theoryConcept.findFirstOrThrow({ where: { versionId: V }, orderBy: { id: "asc" } });
 
     as(alice);
     ok(await m.actions.submitAnswer({ clientId: cid(), questionId: q.id, selected: JSON.parse(q.correctLabels!), mode: "browse" }));
     ok(await m.actions.syncFlag({ questionId: q.id, kind: "flag", on: true, reason: "Alice only", rev: rev() }));
     ok(await m.actions.saveNote({ clientId: cid(), questionId: q.id, content: "Alice's private note", rev: rev() }));
-    ok(await m.actions.syncTheory({ conceptId: concept.id, patch: { status: "completed" }, rev: rev() }));
+    ok(await m.actions.syncTheory({ versionId: V, conceptId: concept.id, patch: { status: "completed" }, rev: rev() }));
     ok(await m.actions.syncSettings({ patch: { examDate: "2026-12-01", questionsPerSession: 33 }, rev: rev() }));
-    ok(await m.actions.syncStudyTask({ date: "2026-11-01", taskKey: "practice-1", done: true, rev: rev() }));
+    ok(await m.actions.syncStudyTask({ versionId: V, date: "2026-11-01", taskKey: "practice-1", done: true, rev: rev() }));
 
     as(bob);
     ok(await m.actions.submitAnswer({ clientId: cid(), questionId: q.id, selected: ["H"], mode: "browse" }));
 
-    const aRow = (await m.questions.loadQuestionRows(aliceId)).find((r) => r.id === q.id)!;
-    const bRow = (await m.questions.loadQuestionRows(bobId)).find((r) => r.id === q.id)!;
+    const aRow = (await m.questions.loadQuestionRows(aliceId, V)).find((r) => r.id === q.id)!;
+    const bRow = (await m.questions.loadQuestionRows(bobId, V)).find((r) => r.id === q.id)!;
     expect(aRow.stats.latestCorrect).toBe(true);
     expect(bRow.stats.latestCorrect).toBe(false);
     expect(aRow.flagged).toBe(true);
     expect(bRow.flagged).toBe(false);
     expect(bRow.stats.attempts).toBe(1);
 
-    const bDetail = (await m.questions.loadQuestionDetail(q.code, bobId))!;
+    const bDetail = (await m.questions.loadQuestionDetail(V, q.code, bobId))!;
     expect(bDetail.q.notes).toHaveLength(0);
     expect(bDetail.q.attempts).toHaveLength(1);
-    expect((await m.questions.loadQuestionDetail(q.code, aliceId))!.q.notes.map((n) => n.content)).toEqual(["Alice's private note"]);
+    expect((await m.questions.loadQuestionDetail(V, q.code, aliceId))!.q.notes.map((n) => n.content)).toEqual(["Alice's private note"]);
 
     expect((await m.settings.getSettings(aliceId)).questionsPerSession).toBe(33);
     expect((await m.settings.getSettings(bobId)).questionsPerSession).toBe(m.settings.DEFAULT_SETTINGS.questionsPerSession);
     expect((await m.settings.getSettings(bobId)).examDate).toBe(m.settings.DEFAULT_SETTINGS.examDate);
-    expect((await m.analytics.loadAnalytics(bobId)).theory.completed).toBe(0);
-    expect((await m.analytics.loadAnalytics(aliceId)).theory.completed).toBe(1);
+    expect((await m.analytics.loadAnalytics(bobId, V)).theory.completed).toBe(0);
+    expect((await m.analytics.loadAnalytics(aliceId, V)).theory.completed).toBe(1);
     expect(await m.prisma.studyTaskCompletion.count({ where: { userId: bobId } })).toBe(0);
   });
 
   it("rejects cross-user access by id", async () => {
     as(alice);
     const note = await m.prisma.questionNote.findFirstOrThrow({ where: { userId: aliceId } });
-    const practice = await m.actions.createPracticeSession({ mode: "all", count: 5, shuffle: false, immediateFeedback: true, includeAttempted: true, includeUnverified: true });
-    const mock = await m.actions.createMockExam({ mockQuestions: 10 });
+    const practice = await m.actions.createPracticeSession("pmle", { mode: "all", count: 5, shuffle: false, immediateFeedback: true, includeAttempted: true, includeUnverified: true });
+    const mock = await m.actions.createMockExam("pmle", { mockQuestions: 10 });
     const mockQ = await m.prisma.sessionQuestion.findFirstOrThrow({ where: { sessionId: mock.id! } });
 
     as(bob);
@@ -249,15 +251,15 @@ describe("autosave consistency", () => {
 
   it("resolves concurrent edits from two tabs by the latest change time", async () => {
     as(alice);
-    const concept = await m.prisma.theoryConcept.findFirstOrThrow({ orderBy: { id: "desc" } });
+    const concept = await m.prisma.theoryConcept.findFirstOrThrow({ where: { versionId: V }, orderBy: { id: "desc" } });
     const base = rev();
     const results = await Promise.all([
-      m.actions.syncTheory({ conceptId: concept.id, patch: { notes: "tab A (older)" }, rev: base + 1 }),
-      m.actions.syncTheory({ conceptId: concept.id, patch: { notes: "tab B (newest)" }, rev: base + 3 }),
-      m.actions.syncTheory({ conceptId: concept.id, patch: { notes: "tab C (middle)" }, rev: base + 2 }),
+      m.actions.syncTheory({ versionId: V, conceptId: concept.id, patch: { notes: "tab A (older)" }, rev: base + 1 }),
+      m.actions.syncTheory({ versionId: V, conceptId: concept.id, patch: { notes: "tab B (newest)" }, rev: base + 3 }),
+      m.actions.syncTheory({ versionId: V, conceptId: concept.id, patch: { notes: "tab C (middle)" }, rev: base + 2 }),
     ]);
     expect(results.every((r) => r.ok)).toBe(true);
-    expect((await m.prisma.theoryProgress.findUniqueOrThrow({ where: { userId_conceptId: { userId: aliceId, conceptId: concept.id } } })).notes).toBe("tab B (newest)");
+    expect((await m.prisma.theoryProgress.findUniqueOrThrow({ where: { userId_versionId_conceptId: { userId: aliceId, versionId: V, conceptId: concept.id } } })).notes).toBe("tab B (newest)");
 
     const t2 = rev();
     await Promise.all([m.actions.syncSettings({ patch: { dailyHours: 3 }, rev: t2 + 2 }), m.actions.syncSettings({ patch: { dailyHours: 5, shuffle: false }, rev: t2 + 1 })]);
@@ -274,12 +276,14 @@ describe("autosave consistency", () => {
     expect(await m.actions.syncFlag({ questionId: 99_999_999, kind: "flag", on: true, rev: rev() })).toMatchObject({ ok: false, code: "NOT_FOUND" });
     expect(await m.actions.recordLocation({ path: "https://evil.example" })).toMatchObject({ ok: false, code: "INVALID" });
     ok(await m.actions.recordLocation({ path: `/questions/${qs[0].code}?from=all` }));
-    expect((await m.prisma.user.findUniqueOrThrow({ where: { id: aliceId } })).lastPath).toBe(`/questions/${qs[0].code}?from=all`);
+    expect((await m.prisma.user.findUniqueOrThrow({ where: { id: aliceId } })).lastPath).toBe(`/c/pmle/questions/${qs[0].code}?from=all`);
+    ok(await m.actions.recordLocation({ path: `/c/pmle/practice` }));
+    expect((await m.prisma.user.findUniqueOrThrow({ where: { id: aliceId } })).lastPath).toBe(`/c/pmle/practice`);
   });
 
   it("keeps the newest mock answer when saves arrive out of order", async () => {
     as(alice);
-    const { id } = await m.actions.createMockExam({ mockQuestions: 10 });
+    const { id } = await m.actions.createMockExam("pmle", { mockQuestions: 10 });
     const sq = await m.prisma.sessionQuestion.findFirstOrThrow({ where: { sessionId: id! } });
     const t = rev();
     ok(await m.actions.saveMockAnswer({ sessionId: id!, questionId: sq.questionId, selected: ["B"], elapsedDeltaMs: 1000, rev: t + 2 }));
@@ -385,7 +389,8 @@ describe("personal backups", () => {
     expect((await m.adminBackupRoute.GET()).status).toBe(200);
   });
 
-  it("takes back-to-back snapshots without a file-name collision", async () => {
+  const pgDumpMissing = !!PG_URL && spawnSync("pg_dump", ["--version"]).error !== undefined;
+  it.skipIf(pgDumpMissing)("takes back-to-back snapshots without a file-name collision (PostgreSQL needs pg_dump installed)", async () => {
     const path = await import("node:path");
     const fs = await import("node:fs");
     const dir = path.join(process.cwd(), "data", "test-backups-collision");
@@ -420,8 +425,8 @@ describe("pre-sign-in progress", () => {
     expect(r.flags).toBe(1);
     expect(r.conflicts).toBeGreaterThanOrEqual(2);
     expect(await m.prisma.user.findUnique({ where: { id: LEGACY_USER_ID } })).toBeNull();
-    expect((await m.questions.loadQuestionRows(aliceId)).find((x) => x.id === qs[0].id)!.bookmarked).toBe(true);
-    expect((await m.questions.loadQuestionRows(aliceId)).find((x) => x.id === q.id)!.bookmarked).toBe(true);
+    expect((await m.questions.loadQuestionRows(aliceId, V)).find((x) => x.id === qs[0].id)!.bookmarked).toBe(true);
+    expect((await m.questions.loadQuestionRows(aliceId, V)).find((x) => x.id === q.id)!.bookmarked).toBe(true);
     const s = await m.settings.getSettings(aliceId);
     expect(s.questionsPerSession).toBe(33);
     expect(s.mockMinutes).toBe(90);

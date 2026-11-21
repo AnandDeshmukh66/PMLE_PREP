@@ -4,31 +4,174 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-// ---------------------------------------------------------------- content (rebuilt by imports)
+// ---------------------------------------------------------------- certifications & versioned content
+
+model Certification {
+  id               String           @id @default(cuid())
+  slug             String           @unique // URL segment, e.g. "pmle"
+  code             String // short label shown in the UI, e.g. "PMLE"
+  name             String
+  description      String           @default("")
+  provider         String           @default("")
+  status           String           @default("active") // active | archived
+  currentVersionId String?          @unique // the published version ordinary users study
+  currentVersion   ContentVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  createdBy        String? // email, for the audit trail
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  versions         ContentVersion[] @relation("Versions")
+  jobs             IngestionJob[]
+  files            UploadedFile[]
+}
+
+/// One immutable release of a certification's exam content. Published versions are never edited:
+/// corrections are made in a new draft, which replaces the current version when it is published.
+model ContentVersion {
+  id              String        @id @default(cuid())
+  certificationId String
+  certification   Certification @relation("Versions", fields: [certificationId], references: [id])
+  label           String // e.g. "2026"
+  status          String        @default("draft") // draft | review | published | archived
+  basedOnId       String? // version this draft was copied from
+  guideTitle      String? // exam guide the content is mapped to
+  sources         String        @default("[]") // JSON summary of sources, frozen when published
+  fingerprint     String? // sha256 of the canonical content; set on review and re-checked on publish
+  questionCount   Int           @default(0)
+  objectiveCount  Int           @default(0)
+  notes           String?
+  createdBy       String?
+  submittedBy     String?
+  submittedAt     DateTime?
+  publishedBy     String?
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  currentOf     Certification?        @relation("CurrentVersion")
+  domains       ExamDomain[]
+  concepts      TheoryConcept[]
+  sourcesRel    QuestionSource[]
+  occurrences   SourceOccurrence[]
+  questions     CanonicalQuestion[]
+  claims        AnswerClaim[]
+  explanations  Explanation[]
+  duplicates    DuplicateCandidate[]
+  importRuns    ImportRun[]
+  issues        ImportIssue[]
+  sessions      PracticeSession[]
+  studyTasks    StudyTaskCompletion[]
+  ingestionJobs IngestionJob[]
+
+  @@unique([certificationId, label])
+  @@index([certificationId, status])
+}
+
+model UploadedFile {
+  id              String           @id @default(cuid())
+  certificationId String
+  certification   Certification    @relation(fields: [certificationId], references: [id])
+  purpose         String // questions | guide
+  fileName        String
+  mimeType        String
+  byteSize        Int
+  sha256          String
+  data            Bytes
+  uploadedBy      String
+  createdAt       DateTime         @default(now())
+  jobs            IngestionJob[]
+  sources         QuestionSource[]
+
+  @@index([certificationId, sha256])
+}
+
+/// Persisted ingestion work. Retries are bounded (attempts < maxAttempts) and always rewrite the job's own
+/// source inside its draft version, so a retried or failed job can never touch published content.
+model IngestionJob {
+  id                 String          @id @default(cuid())
+  certificationId    String
+  certification      Certification   @relation(fields: [certificationId], references: [id])
+  versionId          String? // draft that receives the output
+  version            ContentVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  kind               String // pdf | url | json
+  purpose            String          @default("questions") // questions | guide
+  sourceKey          String // QuestionSource id inside the draft, e.g. "pdf-2027"
+  sourceName         String
+  sourceUrl          String?
+  fileId             String?
+  file               UploadedFile?   @relation(fields: [fileId], references: [id])
+  status             String          @default("queued") // queued | processing | review_required | published | failed
+  attempts           Int             @default(0)
+  maxAttempts        Int             @default(3)
+  nextRunAt          DateTime        @default(now())
+  leaseOwner         String?
+  leaseUntil         DateTime?
+  stages             String          @default("[]") // JSON [{stage, method, status, startedAt, finishedAt, detail}]
+  warnings           String          @default("[]")
+  errorCode          String?
+  error              String?
+  extractedCount     Int             @default(0)
+  validCount         Int             @default(0)
+  duplicateCount     Int             @default(0)
+  lowConfidenceCount Int             @default(0)
+  result             String          @default("{}")
+  createdBy          String
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  startedAt          DateTime?
+  finishedAt         DateTime?
+
+  @@index([status, nextRunAt])
+  @@index([certificationId, createdAt])
+}
+
+model AuditEvent {
+  id              Int      @id @default(autoincrement())
+  at              DateTime @default(now())
+  actor           String // email
+  action          String
+  certificationId String?
+  versionId       String?
+  detail          String   @default("{}")
+
+  @@index([certificationId, at])
+}
+
+// ---------------------------------------------------------------- content (scoped to one version)
 
 model QuestionSource {
-  id             String             @id // "pdf" | "examprepper"
+  versionId      String
+  version        ContentVersion     @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  id             String // "pdf" | "examprepper" | ingestion source key
   name           String
-  kind           String // "pdf" | "website"
+  kind           String // "pdf" | "website" | "json"
   url            String?
   fileName       String?
+  fileId         String?
+  file           UploadedFile?      @relation(fields: [fileId], references: [id])
   declaredCount  Int?
   extractedCount Int                @default(0)
+  retrievedAt    DateTime?
   occurrences    SourceOccurrence[]
+
+  @@id([versionId, id])
 }
 
 model CanonicalQuestion {
-  id                            Int      @id @default(autoincrement())
-  code                          String   @unique
+  id                            Int            @id @default(autoincrement())
+  versionId                     String
+  version                       ContentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  code                          String // stable across versions for the same question
   stem                          String
-  multiSelect                   Boolean  @default(false)
-  selectCount                   Int      @default(1)
+  multiSelect                   Boolean        @default(false)
+  selectCount                   Int            @default(1)
   primaryOccurrenceId           Int?
-  verification                  String   @default("unknown") // verified | source_key | contested | conflict | unknown | user_verified
+  verification                  String         @default("unknown") // verified | source_key | contested | conflict | unknown | user_verified
   verificationNote              String?
   correctLabels                 String? // JSON string[]; null when no gradable answer
   provisionalLabels             String? // JSON string[]; best-supported claim, for provisional feedback only
@@ -36,23 +179,25 @@ model CanonicalQuestion {
   objectiveCode                 String?
   topic                         String?
   subtopic                      String?
-  alignmentScore                Float    @default(0)
-  alignmentBand                 String   @default("weak")
-  classificationConfidence      String   @default("low")
-  classificationConfidenceValue Float    @default(0)
-  classificationExplanation     String   @default("")
+  alignmentScore                Float          @default(0)
+  alignmentBand                 String         @default("weak")
+  classificationConfidence      String         @default("low")
+  classificationConfidenceValue Float          @default(0)
+  classificationExplanation     String         @default("")
   classificationEvidence        String?
-  classificationStatus          String   @default("mapped") // mapped | unmapped | manual
-  legacyStatus                  String   @default("current")
-  legacyNotes                   String   @default("[]")
-  inPdf                         Boolean  @default(false)
-  inExamprepper                 Boolean  @default(false)
-  isCommon                      Boolean  @default(false)
-  hasImages                     Boolean  @default(false)
-  active                        Boolean  @default(true)
+  classificationStatus          String         @default("mapped") // mapped | unmapped | manual
+  legacyStatus                  String         @default("current")
+  legacyNotes                   String         @default("[]")
+  inPdf                         Boolean        @default(false)
+  inExamprepper                 Boolean        @default(false)
+  isCommon                      Boolean        @default(false) // present in two or more sources
+  hasImages                     Boolean        @default(false)
+  active                        Boolean        @default(true)
   mergedIntoId                  Int?
-  createdAt                     DateTime @default(now())
-  updatedAt                     DateTime @updatedAt
+  contentHash                   String         @default("")
+  changeStatus                  String         @default("new") // new | unchanged | changed, against the version it replaces
+  createdAt                     DateTime       @default(now())
+  updatedAt                     DateTime       @updatedAt
 
   options           AnswerOption[]
   occurrences       SourceOccurrence[]         @relation("canonical")
@@ -66,19 +211,23 @@ model CanonicalQuestion {
   sessionQuestions  SessionQuestion[]
   issues            ImportIssue[]
 
-  @@index([active, domainNumber])
-  @@index([objectiveCode])
+  @@unique([versionId, code])
+  @@index([versionId, active, domainNumber])
+  @@index([versionId, objectiveCode])
 }
 
 model SourceOccurrence {
   id                   Int                @id @default(autoincrement())
-  sourceKey            String             @unique // e.g. "pdf:84", "examprepper:136"
+  versionId            String
+  version              ContentVersion     @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  sourceKey            String // e.g. "pdf:84", "examprepper:136"
   sourceId             String
-  source               QuestionSource     @relation(fields: [sourceId], references: [id])
+  source               QuestionSource     @relation(fields: [versionId, sourceId], references: [versionId, id])
   canonicalId          Int?
   canonical            CanonicalQuestion? @relation("canonical", fields: [canonicalId], references: [id])
   homeCanonicalId      Int?
   sourceQnum           Int
+  sourceRef            String? // the source's own question identifier, when it has one
   page                 Int?
   pageEnd              Int?
   url                  String?
@@ -94,6 +243,8 @@ model SourceOccurrence {
   images               String             @default("[]")
   issues               String             @default("[]")
   extractionConfidence Float              @default(1)
+  extractionMethod     String             @default("pipeline") // pipeline | pdf_text | pdf_ocr | html | rendered_html | screenshot_ocr | json
+  excluded             Boolean            @default(false) // set by a reviewer; excluded occurrences form no question
   contentHash          String
   stemHash             String
   legacyStatus         String             @default("current")
@@ -103,6 +254,7 @@ model SourceOccurrence {
   lastImportRunId      Int?
   updatedAt            DateTime           @updatedAt
 
+  @@unique([versionId, sourceKey])
   @@index([canonicalId])
 }
 
@@ -119,11 +271,13 @@ model AnswerOption {
 
 model AnswerClaim {
   id           Int               @id @default(autoincrement())
-  claimKey     String            @unique
+  versionId    String
+  version      ContentVersion    @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  claimKey     String
   questionId   Int
   question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
   sourceKey    String? // null for user claims
-  kind         String // pdf_key | examprepper_answer | examtopics_key | community_vote | user_override
+  kind         String // pdf_key | examprepper_answer | source_key | examtopics_key | community_vote | user_override
   labels       String // JSON canonical labels
   sourceLabels String // JSON labels as published
   percent      Float?
@@ -132,11 +286,16 @@ model AnswerClaim {
   unmappable   Boolean           @default(false)
   createdBy    String            @default("import")
   createdAt    DateTime          @default(now())
+
+  @@unique([versionId, claimKey])
+  @@index([questionId])
 }
 
 model Explanation {
   id           Int               @id @default(autoincrement())
-  explKey      String            @unique
+  versionId    String
+  version      ContentVersion    @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  explKey      String
   questionId   Int
   question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
   sourceKey    String?
@@ -145,39 +304,53 @@ model Explanation {
   verification String // source_provided | community_unverified | ai_generated_unverified
   upvotes      Int?
   sourceUrl    String?
+
+  @@unique([versionId, explKey])
+  @@index([questionId])
 }
 
-// ---------------------------------------------------------------- blueprint & taxonomy
+// ---------------------------------------------------------------- blueprint & taxonomy (per version)
 
 model ExamDomain {
-  number        Int             @id
+  versionId     String
+  version       ContentVersion  @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  number        Int
   title         String
   weightPercent Int?
   objectives    ExamObjective[]
+
+  @@id([versionId, number])
 }
 
 model ExamObjective {
-  code           String                     @id
+  versionId      String
+  code           String
   domainNumber   Int
-  domain         ExamDomain                 @relation(fields: [domainNumber], references: [number])
+  domain         ExamDomain                 @relation(fields: [versionId, domainNumber], references: [versionId, number], onDelete: Cascade)
   title          String
   considerations String // JSON string[]
   order          Int
   mappings       QuestionObjectiveMapping[]
+
+  @@id([versionId, code])
 }
 
 model QuestionObjectiveMapping {
   questionId    Int
   question      CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  versionId     String
   objectiveCode String
-  objective     ExamObjective     @relation(fields: [objectiveCode], references: [code])
+  objective     ExamObjective     @relation(fields: [versionId, objectiveCode], references: [versionId, code], onDelete: Cascade)
   role          String // primary | secondary
 
   @@id([questionId, objectiveCode])
+  @@index([versionId, objectiveCode])
 }
 
 model TheoryConcept {
-  id                  String           @id
+  versionId           String
+  version             ContentVersion   @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  id                  String
   domainNumber        Int
   objectiveCode       String
   secondaryObjectives String           @default("[]")
@@ -190,19 +363,22 @@ model TheoryConcept {
   order               Int
   progress            TheoryProgress[]
   questions           QuestionTopic[]
+
+  @@id([versionId, id])
 }
 
 model QuestionTopic {
   questionId   Int
   question     CanonicalQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  versionId    String
   conceptId    String
-  concept      TheoryConcept     @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  concept      TheoryConcept     @relation(fields: [versionId, conceptId], references: [versionId, id], onDelete: Cascade)
   score        Float
   rank         Int
   matchedTerms String            @default("[]")
 
   @@id([questionId, conceptId])
-  @@index([conceptId])
+  @@index([versionId, conceptId])
 }
 
 // ---------------------------------------------------------------- users & sessions
@@ -226,34 +402,37 @@ model User {
 }
 
 model AuthSession {
-  id         String   @id @default(cuid())
-  tokenHash  String   @unique // sha256 of the random cookie token; the token itself is never stored
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  lastUsedAt DateTime @default(now())
-  expiresAt  DateTime
-  userAgent  String?
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique // sha256 of the random cookie token; the token itself is never stored
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  lastUsedAt    DateTime  @default(now())
+  expiresAt     DateTime
+  userAgent     String?
+  elevatedUntil DateTime? // administrator step-up (ADMIN_ACCESS_CODE) for changing shared content
 
   @@index([userId])
   @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------- user activity (scoped by userId; never reset by imports)
+// Questions belong to exactly one content version, so activity on a question is version-scoped.
 
 model TheoryProgress {
   userId          String
   user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versionId       String
   conceptId       String
-  concept         TheoryConcept @relation(fields: [conceptId], references: [id], onDelete: Cascade)
+  concept         TheoryConcept @relation(fields: [versionId, conceptId], references: [versionId, id])
   status          String        @default("not_started") // not_started | in_progress | completed
   confidence      String? // low | medium | high
   notes           String?
   clientUpdatedAt DateTime? // client clock of the newest accepted write; older writes are ignored
   updatedAt       DateTime      @updatedAt
 
-  @@id([userId, conceptId])
-  @@index([conceptId])
+  @@id([userId, versionId, conceptId])
+  @@index([versionId, conceptId])
 }
 
 model QuestionAttempt {
@@ -321,6 +500,8 @@ model PracticeSession {
   id                String            @id @default(cuid())
   userId            String
   user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versionId         String
+  version           ContentVersion    @relation(fields: [versionId], references: [id])
   kind              String // practice | mock
   mode              String
   title             String
@@ -339,6 +520,7 @@ model PracticeSession {
   attempts          QuestionAttempt[]
 
   @@index([userId, kind, status])
+  @@index([userId, versionId, status])
 }
 
 model SessionQuestion {
@@ -363,8 +545,10 @@ model SessionQuestion {
 }
 
 model DuplicateCandidate {
-  id                Int       @id @default(autoincrement())
-  pairKey           String    @unique
+  id                Int            @id @default(autoincrement())
+  versionId         String
+  version           ContentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  pairKey           String
   aKey              String
   bKey              String
   stage             String // exact | fuzzy | semantic
@@ -372,27 +556,33 @@ model DuplicateCandidate {
   stemRatio         Float
   optionSim         Float
   cosine            Float?
-  numberMismatch    String    @default("[]")
-  answersAgree      Boolean   @default(false)
+  numberMismatch    String         @default("[]")
+  answersAgree      Boolean        @default(false)
   suggestedDecision String // auto_confirmed | auto_rejected | pending
   reason            String
   status            String // auto_confirmed | auto_rejected | pending | approved | rejected
   previousStatus    String?
   decidedAt         DateTime?
-  updatedAt         DateTime  @updatedAt
+  updatedAt         DateTime       @updatedAt
+
+  @@unique([versionId, pairKey])
 }
 
 model ImportRun {
-  id         Int       @id @default(autoincrement())
-  startedAt  DateTime  @default(now())
+  id         Int            @id @default(autoincrement())
+  versionId  String
+  version    ContentVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  startedAt  DateTime       @default(now())
   finishedAt DateTime?
-  status     String    @default("running")
-  summary    String    @default("{}")
+  status     String         @default("running")
+  summary    String         @default("{}")
 }
 
 model ImportIssue {
   id         Int                @id @default(autoincrement())
-  issueKey   String             @unique
+  versionId  String
+  version    ContentVersion     @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  issueKey   String
   lastRunId  Int?
   sourceKey  String?
   questionId Int?
@@ -404,19 +594,23 @@ model ImportIssue {
   resolution String?
   active     Boolean            @default(true)
   updatedAt  DateTime           @updatedAt
+
+  @@unique([versionId, issueKey])
 }
 
 model StudyTaskCompletion {
-  id              Int       @id @default(autoincrement())
+  id              Int            @id @default(autoincrement())
   userId          String
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versionId       String
+  version         ContentVersion @relation(fields: [versionId], references: [id])
   date            String // YYYY-MM-DD local
   taskKey         String
-  done            Boolean   @default(true)
+  done            Boolean        @default(true)
   clientUpdatedAt DateTime?
-  completedAt     DateTime  @default(now())
+  completedAt     DateTime       @default(now())
 
-  @@unique([userId, date, taskKey])
+  @@unique([userId, versionId, date, taskKey])
 }
 
 model Setting {

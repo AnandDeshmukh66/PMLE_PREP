@@ -1,12 +1,13 @@
 "use client";
 
+import { useCert, useCertHref, useDomainTitle } from "@/components/cert-context";
 import { useRouter } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { Play, Search } from "lucide-react";
 import { createPracticeSession } from "@/lib/actions";
 import { callServer } from "@/lib/call-server";
 import { PRACTICE_MODES, type PracticeMode } from "@/lib/selection";
-import { cn, DOMAIN_SHORT } from "@/lib/utils";
+import { cn, domainShort } from "@/lib/utils";
 import { Button, Card, CardHeader } from "./ui";
 
 type Init = { mode: PracticeMode; count: number; domains: number[]; concepts: string[]; shuffle: boolean; immediateFeedback: boolean };
@@ -22,6 +23,9 @@ export function PracticeConfigForm({
   domains: { number: number; title: string; count: number }[];
   concepts: { id: string; name: string; domain: number; count: number }[];
 }) {
+  const L = useCertHref();
+  const cert = useCert();
+  const domainTitle = useDomainTitle();
   const router = useRouter();
   const [mode, setMode] = useState<PracticeMode>(initial.mode);
   const [count, setCount] = useState(initial.count);
@@ -46,11 +50,11 @@ export function PracticeConfigForm({
   const startSession = () => {
     setMsg(null);
     start(async () => {
-      const res = await callServer(() => createPracticeSession({ mode, count, shuffle, immediateFeedback: feedback, includeAttempted, includeUnverified, domains: doms, concepts: mode === "topic" ? cons : undefined }));
+      const res = await callServer(() => createPracticeSession(cert.slug, { mode, count, shuffle, immediateFeedback: feedback, includeAttempted, includeUnverified, domains: doms, concepts: mode === "topic" ? cons : undefined }));
       if (!res.ok) return setMsg(res.error);
       const r = res.value;
       if (!r.id) setMsg(r.note ?? "No questions match this configuration.");
-      else router.push(`/practice/${r.id}`);
+      else router.push(L(`/practice/${r.id}`));
     });
   };
 
@@ -84,7 +88,7 @@ export function PracticeConfigForm({
             <div className="flex flex-wrap gap-1.5">
               {domains.map((d) => (
                 <button key={d.number} type="button" className={chip(doms.includes(d.number))} onClick={() => setDoms((s) => (s.includes(d.number) ? s.filter((x) => x !== d.number) : [...s, d.number]))} data-testid={`domain-${d.number}`}>
-                  {d.number} · {DOMAIN_SHORT[d.number]} <span className="text-faint">{d.count}</span>
+                  {d.number} · {domainShort(domainTitle(d.number), 26)} <span className="text-faint">{d.count}</span>
                 </button>
               ))}
             </div>

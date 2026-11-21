@@ -9,6 +9,7 @@ export default defineConfig({
       "next/cache": path.resolve(__dirname, "tests/stubs/next-cache.ts"),
       "next/headers": path.resolve(__dirname, "tests/stubs/next-headers.ts"),
       "next/navigation": path.resolve(__dirname, "tests/stubs/next-navigation.ts"),
+      "next/server": path.resolve(__dirname, "tests/stubs/next-server.ts"),
     },
   },
   test: {

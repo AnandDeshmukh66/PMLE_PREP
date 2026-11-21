@@ -29,7 +29,7 @@ export const VERIFICATION_LABEL: Record<Verification, string> = {
 };
 
 export const VERIFICATION_HELP: Record<Verification, string> = {
-  verified: "Answer keys from the PDF and ExamPrepper agree, and the community vote does not dispute them.",
+  verified: "Answer keys from two or more independent sources agree, and the community vote does not dispute them.",
   source_key: "Only one source provides a key, and nothing contradicts it.",
   user_verified: "You resolved this answer in the review queue.",
   contested: "Keys agree, but the ExamTopics key dissents or the community vote is nearly tied. Feedback is provisional.",
@@ -37,7 +37,17 @@ export const VERIFICATION_HELP: Record<Verification, string> = {
   unknown: "No source provides an answer.",
 };
 
-const KEY_KINDS = new Set(["pdf_key", "examprepper_answer"]);
+/** Answer keys published by a source. "source_key" is the generic kind written by the ingestion pipeline. */
+const KEY_KINDS = new Set(["pdf_key", "examprepper_answer", "source_key"]);
+
+/** Which source published a key: the sourceKey prefix ("pdf-2027:12" -> "pdf-2027"), else the legacy kind. */
+function keySource(c: ClaimInput): string {
+  if (c.sourceKey && c.sourceKey.includes(":")) return c.sourceKey.slice(0, c.sourceKey.lastIndexOf(":"));
+  return c.kind === "pdf_key" ? "pdf" : c.kind === "examprepper_answer" ? "examprepper" : (c.sourceKey ?? c.kind);
+}
+
+const SOURCE_TITLE: Record<string, string> = { pdf: "PDF", examprepper: "ExamPrepper" };
+const sourceTitle = (s: string) => SOURCE_TITLE[s] ?? s;
 
 export function isGradable(status: string, gradeContested = false): boolean {
   if (status === "verified" || status === "source_key" || status === "user_verified") return true;
@@ -66,7 +76,7 @@ export function computeVerification(claims: ClaimInput[]): VerificationResult {
   const communityTop = community ? labelSig(community.labels) : null;
   if (sigs.length > 1) {
     const preferred = communityTop && sigs.includes(communityTop) ? community!.labels : keys.find((k) => k.kind === "examprepper_answer")?.labels ?? keys[0].labels;
-    const parts = keys.map((k) => `${k.kind === "pdf_key" ? "PDF" : "ExamPrepper"}: ${fmt(k.labels)}`);
+    const parts = keys.map((k) => `${sourceTitle(keySource(k))}: ${fmt(k.labels)}`);
     if (community) parts.push(`community ${community.percent ?? "?"}%: ${fmt(community.labels)}`);
     return { status: "conflict", correct: null, provisional: sortedLabels(preferred), note: `Sources disagree (${parts.join("; ")}).` };
   }
@@ -92,10 +102,14 @@ export function computeVerification(claims: ClaimInput[]): VerificationResult {
       return { status: "contested", correct: null, provisional: agreed, note: `Community vote is nearly tied (${top}% vs ${second}%).` };
     }
   }
-  const sources = new Set(keys.map((k) => (k.kind === "pdf_key" ? "pdf" : "examprepper")));
-  const partialNote = partialKeys.length ? " The PDF lists an incomplete key for this multi-select question." : "";
-  if (sources.size >= 2) {
-    return { status: "verified", correct: agreed, provisional: agreed, note: `PDF and ExamPrepper keys agree on ${fmt(agreed)}${community ? `; community ${community.percent}% agree` : ""}.${partialNote}` };
+  const rank = (s: string) => (s === "pdf" ? 0 : s === "examprepper" ? 1 : 2);
+  const sources = [...new Set(keys.map(keySource))].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  const partialNote = partialKeys.length ? ` ${partialKeys.some((p) => keySource(p) === "pdf") ? "The PDF" : "A source"} lists an incomplete key for this multi-select question.` : "";
+  const agree = community ? `; community ${community.percent}% agree` : "";
+  if (sources.length >= 2) {
+    const names = sources.length === 2 ? sources.map(sourceTitle).join(" and ") : `${sources.length} sources (${sources.map(sourceTitle).join(", ")})`;
+    return { status: "verified", correct: agreed, provisional: agreed, note: `${names} keys agree on ${fmt(agreed)}${agree}.${partialNote}` };
   }
-  return { status: "source_key", correct: agreed, provisional: agreed, note: `Only ${[...sources][0] === "pdf" ? "the PDF" : "ExamPrepper"} provides a key (${fmt(agreed)})${community ? `; community ${community.percent}% agree` : ""}.${partialNote}` };
+  const only = sources[0] === "pdf" ? "the PDF" : sourceTitle(sources[0]);
+  return { status: "source_key", correct: agreed, provisional: agreed, note: `Only ${only} provides a key (${fmt(agreed)})${agree}.${partialNote}` };
 }

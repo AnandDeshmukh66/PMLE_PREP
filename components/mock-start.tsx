@@ -1,5 +1,6 @@
 "use client";
 
+import { useCert, useCertHref } from "@/components/cert-context";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Play } from "lucide-react";
@@ -10,6 +11,8 @@ import { Button, Card, CardHeader } from "./ui";
 type Defaults = { mockQuestions: number; mockMinutes: number; mockFallback: "redistribute" | "shrink"; mockExcludeLegacy: boolean; mockOnlyGradable: boolean };
 
 export function MockStart({ defaults, hasActive }: { defaults: Defaults; hasActive: boolean }) {
+  const L = useCertHref();
+  const cert = useCert();
   const router = useRouter();
   const [cfg, setCfg] = useState(defaults);
   const [err, setErr] = useState<string | null>(null);
@@ -53,11 +56,11 @@ export function MockStart({ defaults, hasActive }: { defaults: Defaults; hasActi
             if (hasActive && !confirm("A mock exam is already in progress. Start another one anyway?")) return;
             setErr(null);
             start(async () => {
-              const res = await callServer(() => createMockExam(cfg));
+              const res = await callServer(() => createMockExam(cert.slug, cfg));
               if (!res.ok) return setErr(res.error);
               const r = res.value;
               if (!r.id) setErr(r.error ?? "Could not create the exam.");
-              else router.push(`/mock/${r.id}`);
+              else router.push(L(`/mock/${r.id}`));
             });
           }}
         >

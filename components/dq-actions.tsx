@@ -7,12 +7,12 @@ import { callServer } from "@/lib/call-server";
 import { cn } from "@/lib/utils";
 import { Button } from "./ui";
 
-export function DuplicateButtons({ pairKey, status, previousStatus }: { pairKey: string; status: string; previousStatus: string | null }) {
+export function DuplicateButtons({ versionId, pairKey, status, previousStatus }: { versionId: string; pairKey: string; status: string; previousStatus: string | null }) {
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const run = (action: "approve" | "reject" | "undo") =>
     start(async () => {
-      const res = await callServer(() => decideDuplicate(pairKey, action));
+      const res = await callServer(() => decideDuplicate(versionId, pairKey, action));
       const r = res.ok ? res.value : null;
       setMsg(!res.ok ? res.error : r ? `Rebuilt: ${r.merged} merged, ${r.created} split` : null);
     });
@@ -73,12 +73,12 @@ export function AnswerResolver({ questionId, labels, current, hasOverride }: { q
   );
 }
 
-export function IssueButtons({ issueKey, status }: { issueKey: string; status: string }) {
+export function IssueButtons({ versionId, issueKey, status }: { versionId: string; issueKey: string; status: string }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const run = (next: "open" | "resolved" | "ignored", note?: string) =>
     start(async () => {
-      const r = await callServer(() => setIssueStatus(issueKey, next, note));
+      const r = await callServer(() => setIssueStatus(versionId, issueKey, next, note));
       setErr(r.ok ? null : r.error);
     });
   const error = err && <span className="text-[11px] text-bad">{err}</span>;

@@ -1,12 +1,12 @@
 import "server-only";
 import { prisma } from "./db";
-import { type Filters, type Scope, LEGACY_FLAGGED } from "./filters";
+import { type Filters, type Scope, LEGACY_FLAGGED, scopeSourceId } from "./filters";
 import { parseJson } from "./json";
 import { getSettings } from "./settings";
 import { type AttemptLite, type QuestionStats, questionStats } from "./stats";
 import { isGradable } from "./verification";
 
-export type SourceRef = { source: "pdf" | "examprepper"; qnum: number; page: number | null; url: string | null; key: string };
+export type SourceRef = { source: string; qnum: number; page: number | null; url: string | null; key: string };
 
 export type QuestionRow = {
   id: number;
@@ -24,8 +24,7 @@ export type QuestionRow = {
   gradable: boolean;
   legacyStatus: string;
   isCommon: boolean;
-  inPdf: boolean;
-  inExamprepper: boolean;
+  sourceIds: string[];
   multiSelect: boolean;
   hasImages: boolean;
   refs: SourceRef[];
@@ -39,21 +38,28 @@ export type QuestionRow = {
   searchText: string;
 };
 
-export async function loadQuestionRows(userId: string): Promise<QuestionRow[]> {
-  const [settings, qs, occs, attempts, flags, notes, topics] = await Promise.all([
+/** Source ids of a version in display order (by first registration), used to order references consistently. */
+export async function versionSources(versionId: string) {
+  return prisma.questionSource.findMany({ where: { versionId }, select: { id: true, name: true, kind: true, url: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] });
+}
+
+export async function loadQuestionRows(userId: string, versionId: string): Promise<QuestionRow[]> {
+  const [settings, qs, occs, attempts, flags, notes, topics, sources] = await Promise.all([
     getSettings(userId),
-    prisma.canonicalQuestion.findMany({ where: { active: true }, include: { options: { orderBy: { order: "asc" } } }, orderBy: { code: "asc" } }),
-    prisma.sourceOccurrence.findMany({ select: { canonicalId: true, sourceId: true, sourceQnum: true, page: true, url: true, sourceKey: true } }),
-    prisma.questionAttempt.findMany({ where: { userId }, select: { questionId: true, isCorrect: true, partial: true, createdAt: true, elapsedMs: true, mode: true, provisionalCorrect: true } }),
-    prisma.questionFlag.findMany({ where: { userId, active: true } }),
-    prisma.questionNote.groupBy({ by: ["questionId"], where: { userId }, _count: true }),
-    prisma.questionTopic.findMany({ select: { questionId: true, conceptId: true }, orderBy: { rank: "asc" } }),
+    prisma.canonicalQuestion.findMany({ where: { versionId, active: true }, include: { options: { orderBy: { order: "asc" } } }, orderBy: { code: "asc" } }),
+    prisma.sourceOccurrence.findMany({ where: { versionId, excluded: false }, select: { canonicalId: true, sourceId: true, sourceQnum: true, page: true, url: true, sourceKey: true } }),
+    prisma.questionAttempt.findMany({ where: { userId, question: { versionId } }, select: { questionId: true, isCorrect: true, partial: true, createdAt: true, elapsedMs: true, mode: true, provisionalCorrect: true } }),
+    prisma.questionFlag.findMany({ where: { userId, active: true, question: { versionId } } }),
+    prisma.questionNote.groupBy({ by: ["questionId"], where: { userId, question: { versionId } }, _count: true }),
+    prisma.questionTopic.findMany({ where: { versionId }, select: { questionId: true, conceptId: true }, orderBy: { rank: "asc" } }),
+    versionSources(versionId),
   ]);
+  const order = new Map(sources.map((s, i) => [s.id, i]));
   const refs = new Map<number, SourceRef[]>();
   for (const o of occs) {
     if (!o.canonicalId) continue;
     if (!refs.has(o.canonicalId)) refs.set(o.canonicalId, []);
-    refs.get(o.canonicalId)!.push({ source: o.sourceId as SourceRef["source"], qnum: o.sourceQnum, page: o.page, url: o.url, key: o.sourceKey });
+    refs.get(o.canonicalId)!.push({ source: o.sourceId, qnum: o.sourceQnum, page: o.page, url: o.url, key: o.sourceKey });
   }
   const att = new Map<number, AttemptLite[]>();
   for (const a of attempts) (att.get(a.questionId) ?? att.set(a.questionId, []).get(a.questionId)!).push(a);
@@ -62,9 +68,11 @@ export async function loadQuestionRows(userId: string): Promise<QuestionRow[]> {
   const nc = new Map(notes.map((n) => [n.questionId, n._count]));
   const tp = new Map<number, string[]>();
   for (const t of topics) (tp.get(t.questionId) ?? tp.set(t.questionId, []).get(t.questionId)!).push(t.conceptId);
+  const rank = (s: string) => order.get(s) ?? 999;
 
   return qs.map((q) => {
-    const r = (refs.get(q.id) ?? []).sort((a, b) => (a.source === b.source ? a.qnum - b.qnum : a.source === "pdf" ? -1 : 1));
+    const r = (refs.get(q.id) ?? []).sort((a, b) => (a.source === b.source ? a.qnum - b.qnum : rank(a.source) - rank(b.source)));
+    const sourceIds = [...new Set(r.map((x) => x.source))];
     const f = fl.get(q.id);
     const searchText = [
       q.code,
@@ -92,9 +100,8 @@ export async function loadQuestionRows(userId: string): Promise<QuestionRow[]> {
       verification: q.verification,
       gradable: isGradable(q.verification, settings.gradeContested) && !!q.correctLabels,
       legacyStatus: q.legacyStatus,
-      isCommon: q.isCommon,
-      inPdf: q.inPdf,
-      inExamprepper: q.inExamprepper,
+      isCommon: sourceIds.length >= 2,
+      sourceIds,
       multiSelect: q.multiSelect,
       hasImages: q.hasImages,
       refs: r,
@@ -111,13 +118,11 @@ export async function loadQuestionRows(userId: string): Promise<QuestionRow[]> {
 }
 
 function inScope(r: QuestionRow, scope: Scope): boolean {
+  const sid = scopeSourceId(scope);
+  if (sid !== null) return r.sourceIds.includes(sid);
   switch (scope) {
     case "common":
       return r.isCommon;
-    case "pdf":
-      return r.inPdf;
-    case "examprepper":
-      return r.inExamprepper;
     case "marked":
       return r.marked;
     case "flagged":
@@ -131,27 +136,35 @@ function inScope(r: QuestionRow, scope: Scope): boolean {
   }
 }
 
-function matchesSearch(r: QuestionRow, q: string): boolean {
-  const terms = q.toLowerCase().replace(/ep:/g, "examprepper:").split(/\s+/).filter(Boolean);
-  const m = /^(pdf|ep|examprepper)[\s:#-]*(\d+)$/i.exec(q.trim());
+/** "pdf 84" / "ep:136" / "<source> <n>" finds a source's own question number; "Q-12" finds a canonical code. */
+function matchesSearch(r: QuestionRow, q: string, sources: Set<string>): boolean {
+  const s = q.trim();
+  const m = /^([a-z][a-z0-9_-]{0,39}?)[\s:#-]*(\d+)$/i.exec(s);
   if (m) {
-    const src = m[1].toLowerCase() === "pdf" ? "pdf" : "examprepper";
-    return r.refs.some((x) => x.source === src && x.qnum === Number(m[2]));
+    const word = m[1].toLowerCase();
+    const src = word === "ep" ? "examprepper" : word;
+    if (sources.has(src)) return r.refs.some((x) => x.source === src && x.qnum === Number(m[2]));
   }
-  const qc = /^q-?0*(\d+)$/i.exec(q.trim());
-  if (qc) return Number(r.code.slice(2)) === Number(qc[1]);
+  const qc = /^q-?0*(\d+)$/i.exec(s);
+  if (qc) return Number(r.code.replace(/^\D+/, "")) === Number(qc[1]);
+  const terms = s.toLowerCase().replace(/ep:/g, "examprepper:").split(/\s+/).filter(Boolean);
   return terms.every((t) => r.searchText.includes(t));
 }
 
 export function filterRows(rows: QuestionRow[], scope: Scope, f: Filters): QuestionRow[] {
   let out = rows.filter((r) => inScope(r, scope));
-  if (f.q) out = out.filter((r) => matchesSearch(r, f.q!));
+  if (f.q) {
+    const sources = new Set(rows.flatMap((r) => r.sourceIds));
+    out = out.filter((r) => matchesSearch(r, f.q!, sources));
+  }
   if (f.domain?.length) out = out.filter((r) => r.domainNumber !== null && f.domain!.includes(r.domainNumber));
   if (f.objective) out = out.filter((r) => r.objectiveCode === f.objective);
   if (f.concept) out = out.filter((r) => r.conceptIds.includes(f.concept!));
   if (f.source === "common") out = out.filter((r) => r.isCommon);
-  if (f.source === "pdf_only") out = out.filter((r) => r.inPdf && !r.inExamprepper);
-  if (f.source === "examprepper_only") out = out.filter((r) => r.inExamprepper && !r.inPdf);
+  else if (f.source?.startsWith("only:")) {
+    const sid = f.source.slice(5);
+    out = out.filter((r) => r.sourceIds.length === 1 && r.sourceIds[0] === sid);
+  }
   if (f.status === "attempted") out = out.filter((r) => r.stats.attempts > 0);
   if (f.status === "unattempted") out = out.filter((r) => r.stats.attempts === 0);
   if (f.status === "correct") out = out.filter((r) => r.stats.latestCorrect === true);
@@ -169,10 +182,15 @@ export function filterRows(rows: QuestionRow[], scope: Scope, f: Filters): Quest
   if (f.legacy === "current") out = out.filter((r) => !LEGACY_FLAGGED.has(r.legacyStatus));
   if (f.legacy === "legacy") out = out.filter((r) => LEGACY_FLAGGED.has(r.legacyStatus));
 
-  const pdfQ = (r: QuestionRow) => r.refs.find((x) => x.source === "pdf")?.qnum ?? 1e9;
-  const epQ = (r: QuestionRow) => r.refs.find((x) => x.source === "examprepper")?.qnum ?? 1e9;
+  const qnum = (r: QuestionRow, sid: string) => r.refs.find((x) => x.source === sid)?.qnum ?? 1e9;
   const acc = (r: QuestionRow) => (r.stats.graded ? r.stats.correctAttempts / r.stats.graded : 2);
-  switch (f.sort) {
+  const sort = f.sort ?? "code";
+  if (sort.startsWith("qnum:")) {
+    const sid = sort.slice(5);
+    out.sort((a, b) => qnum(a, sid) - qnum(b, sid) || a.code.localeCompare(b.code));
+    return out;
+  }
+  switch (sort) {
     case "alignment_desc":
       out.sort((a, b) => b.alignmentScore - a.alignmentScore || a.code.localeCompare(b.code));
       break;
@@ -185,26 +203,20 @@ export function filterRows(rows: QuestionRow[], scope: Scope, f: Filters): Quest
     case "recent":
       out.sort((a, b) => (b.stats.lastAttemptAt?.getTime() ?? 0) - (a.stats.lastAttemptAt?.getTime() ?? 0) || a.code.localeCompare(b.code));
       break;
-    case "pdf_qnum":
-      out.sort((a, b) => pdfQ(a) - pdfQ(b));
-      break;
-    case "examprepper_qnum":
-      out.sort((a, b) => epQ(a) - epQ(b));
-      break;
     default:
       out.sort((a, b) => a.code.localeCompare(b.code));
   }
   return out;
 }
 
-export async function loadQuestionDetail(code: string, userId: string) {
+export async function loadQuestionDetail(versionId: string, code: string, userId: string) {
   const q = await prisma.canonicalQuestion.findUnique({
-    where: { code },
+    where: { versionId_code: { versionId, code } },
     include: {
       options: { orderBy: { order: "asc" } },
       claims: true,
       explanations: true,
-      occurrences: { orderBy: [{ sourceId: "desc" }, { sourceQnum: "asc" }] },
+      occurrences: { where: { excluded: false }, orderBy: [{ sourceId: "desc" }, { sourceQnum: "asc" }] },
       topics: { include: { concept: { include: { progress: { where: { userId } } } } }, orderBy: { rank: "asc" } },
       objectiveMappings: { include: { objective: true } },
       attempts: { where: { userId }, orderBy: { createdAt: "desc" }, take: 30 },

@@ -14,7 +14,8 @@ export function freshDbUrl(name: string): string {
     u.searchParams.set("schema", `test_${name.replace(/\W/g, "_")}`);
     const url = u.toString();
     execSync(`npx prisma db execute --url "${url}" --stdin`, { cwd: ROOT, input: `DROP SCHEMA IF EXISTS "${u.searchParams.get("schema")}" CASCADE;`, stdio: ["pipe", "pipe", "pipe"] });
-    execSync("node scripts/db.mjs migrate deploy", { cwd: ROOT, env: { ...process.env, DATABASE_URL: url }, stdio: "pipe" });
+    // Migrations use DIRECT_URL, which lib/db.ts may already have set to an earlier test database in this process.
+    execSync("node scripts/db.mjs migrate deploy", { cwd: ROOT, env: { ...process.env, DATABASE_URL: url, DIRECT_URL: url }, stdio: "pipe" });
     return url;
   }
   const file = path.join(ROOT, "data", `test-${name}.db`);

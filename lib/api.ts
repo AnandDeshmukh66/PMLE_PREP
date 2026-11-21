@@ -1,5 +1,5 @@
 import "server-only";
-import { type CurrentUser, getCurrentUser } from "./auth";
+import { adminStepUp, type CurrentUser, getCurrentUser } from "./auth";
 
 const json = (status: number, error: string) => Response.json({ error }, { status, headers: { "cache-control": "no-store" } });
 
@@ -8,6 +8,7 @@ export async function apiUser(opts: { admin?: boolean } = {}): Promise<CurrentUs
   const user = await getCurrentUser();
   if (!user) return json(401, "Sign in required.");
   if (opts.admin && !user.isAdmin) return json(403, "Administrator access required.");
+  if (opts.admin && !user.canManageContent) return json(403, adminStepUp().mode === "disabled" ? "Administration is disabled until ADMIN_ACCESS_CODE is configured on the server." : "Confirm your administrator access code first (Settings → Administrator access).");
   return user;
 }
 

@@ -4,7 +4,7 @@ import { prisma } from "./db";
 import { buildPlan } from "./plan";
 import type { Settings } from "./settings";
 
-export async function loadPlan(userId: string, a: Analytics, settings: Settings) {
+export async function loadPlan(userId: string, versionId: string, a: Analytics, settings: Settings) {
   const today = localDate(new Date());
   const highRemaining = new Map<number, number>();
   for (const c of a.conceptStats) if (c.priority === "high" && c.status !== "completed") highRemaining.set(c.domain, (highRemaining.get(c.domain) ?? 0) + 1);
@@ -20,7 +20,7 @@ export async function loadPlan(userId: string, a: Analytics, settings: Settings)
     mocksDone: a.mockHistory.length,
     unattemptedHighAlignment: a.rows.filter((r) => r.alignmentScore >= 0.75 && !r.stats.attempts).length,
   });
-  const done = await prisma.studyTaskCompletion.findMany({ where: { userId, done: true, date: { in: plan.days.map((d) => d.date) } } });
+  const done = await prisma.studyTaskCompletion.findMany({ where: { userId, versionId, done: true, date: { in: plan.days.map((d) => d.date) } } });
   const doneSet = new Set(done.map((d) => `${d.date}|${d.taskKey}`));
   return { today, ...plan, isDone: (date: string, key: string) => doneSet.has(`${date}|${key}`) };
 }

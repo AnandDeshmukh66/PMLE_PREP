@@ -1,11 +1,12 @@
 "use client";
 
+import { useCert, useCertHref } from "@/components/cert-context";
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import { Check, ChevronDown, NotebookPen, Search } from "lucide-react";
 import type { TheoryState } from "@/lib/actions";
 import { enqueue, hasPending, type KeyEvent, useKeyEvents, useServerState } from "@/lib/sync-client";
-import { cn, DOMAIN_COLOR, pct, relTime } from "@/lib/utils";
+import { cn, domainColor, pct, relTime } from "@/lib/utils";
 import { FieldStatus, useDebouncedSave } from "./autosave";
 import { Badge, Card, ProgressBar, ProgressRing } from "./ui";
 
@@ -46,8 +47,11 @@ const applyPatch = (it: TheoryItem, p: Patch, at: string | null = new Date().toI
 });
 
 /** Saves one concept's change (merged with any still-pending change to the same concept). */
-function saveTheory(p: Patch) {
-  enqueue("theory", `theory:${p.id}`, {
+const theoryKey = (versionId: string, conceptId: string) => `theory:${versionId}:${conceptId}`;
+
+function saveTheory(versionId: string, p: Patch) {
+  enqueue("theory", theoryKey(versionId, p.id), {
+    versionId,
     conceptId: p.id,
     patch: {
       ...(p.status !== undefined ? { status: p.status as Status } : {}),
@@ -66,9 +70,10 @@ export function TheoryBoard({
   domains: { number: number; title: string; weight: number }[];
   initial?: { domain: number | null; unfinished: boolean; high: boolean };
 }) {
+  const versionId = useCert().versionId!;
   const [optimistic, setItems] = useServerState(items, (local, server) => {
     const mine = new Map(local.map((it) => [it.id, it]));
-    return server.map((it) => (hasPending(`theory:${it.id}`) ? (mine.get(it.id) ?? it) : it));
+    return server.map((it) => (hasPending(theoryKey(versionId, it.id)) ? (mine.get(it.id) ?? it) : it));
   });
   const [q, setQ] = useState("");
   const [domain, setDomain] = useState<number | null>(initial?.domain ?? null);
@@ -78,8 +83,8 @@ export function TheoryBoard({
 
   const update = useCallback((p: Patch, local = false) => {
     setItems((state) => state.map((it) => (it.id === p.id ? applyPatch(it, p, local ? null : undefined) : it)));
-    if (!local) saveTheory(p);
-  }, [setItems]);
+    if (!local) saveTheory(versionId, p);
+  }, [setItems, versionId]);
 
   const visible = useMemo(() => {
     const s = q.toLowerCase();
@@ -171,7 +176,7 @@ export function TheoryBoard({
           return (
             <section key={d.number} aria-labelledby={`dom-${d.number}`}>
               <h2 id={`dom-${d.number}`} className="mb-2 flex items-center gap-2 text-sm font-semibold text-fg">
-                <span className="size-2 rounded-full" style={{ background: DOMAIN_COLOR[d.number] }} />
+                <span className="size-2 rounded-full" style={{ background: domainColor(d.number) }} />
                 Domain {d.number}: {d.title}
                 <span className="font-normal text-faint">· {d.weight}%</span>
               </h2>
@@ -207,11 +212,12 @@ export function TheoryBoard({
 }
 
 export function ConceptEditor({ item }: { item: TheoryItem }) {
-  const [it, setIt] = useServerState(item, (local, server) => (hasPending(`theory:${server.id}`) ? local : server));
+  const versionId = useCert().versionId!;
+  const [it, setIt] = useServerState(item, (local, server) => (hasPending(theoryKey(versionId, server.id)) ? local : server));
   const update = useCallback((p: Patch, local = false) => {
     setIt((s) => applyPatch(s, p, local ? null : undefined));
-    if (!local) saveTheory(p);
-  }, [setIt]);
+    if (!local) saveTheory(versionId, p);
+  }, [setIt, versionId]);
   return <ConceptCard it={it} update={update} />;
 }
 
@@ -224,9 +230,10 @@ function FilterChip({ on, set, children, testid }: { on: boolean; set: (v: boole
 }
 
 function ConceptCard({ it, update }: { it: TheoryItem; update: (p: Patch, local?: boolean) => void }) {
+  const L = useCertHref();
   const [editing, setEditing] = useState(false);
   const [notes, setNotes] = useState(it.notes);
-  const key = `theory:${it.id}`;
+  const key = theoryKey(useCert().versionId!, it.id);
   const saveNotes = useCallback((v: string) => update({ id: it.id, notes: v }), [it.id, update]);
   const { schedule, flush, dirty } = useDebouncedSave(saveNotes);
   useKeyEvents(
@@ -257,7 +264,7 @@ function ConceptCard({ it, update }: { it: TheoryItem; update: (p: Patch, local?
           {complete && <Check className="size-3" strokeWidth={3} />}
         </button>
         <div className="min-w-0 flex-1">
-          <Link href={`/theory/${it.id}`} className={cn("text-[13px] leading-snug font-medium hover:text-accent", complete ? "text-fg-2" : "text-fg")}>
+          <Link href={L(`/theory/${it.id}`)} className={cn("text-[13px] leading-snug font-medium hover:text-accent", complete ? "text-fg-2" : "text-fg")}>
             {it.name}
           </Link>
           <p className="mt-0.5 line-clamp-2 text-[11.5px] leading-snug text-muted">{it.description}</p>
@@ -271,7 +278,7 @@ function ConceptCard({ it, update }: { it: TheoryItem; update: (p: Patch, local?
         {it.priority === "medium" && <Badge tone="warn">medium</Badge>}
         {it.priority === "low" && <Badge tone="neutral">low</Badge>}
         {it.guideStatus !== "explicit" && <Badge tone="violet">{it.guideStatus}</Badge>}
-        <Link href={`/questions?concept=${it.id}`} className="ml-auto text-[11px] text-muted hover:text-accent">
+        <Link href={L(`/questions?concept=${it.id}`)} className="ml-auto text-[11px] text-muted hover:text-accent">
           {it.questionCount} question{it.questionCount === 1 ? "" : "s"}
           {it.accuracy !== null ? ` · ${pct(it.accuracy)}` : ""}
         </Link>

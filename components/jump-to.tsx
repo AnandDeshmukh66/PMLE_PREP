@@ -1,9 +1,11 @@
 "use client";
 
+import { useCertHref } from "@/components/cert-context";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function JumpTo({ scopeQuery }: { scopeQuery: string }) {
+  const L = useCertHref();
   const router = useRouter();
   const [v, setV] = useState("");
   return (
@@ -12,7 +14,7 @@ export function JumpTo({ scopeQuery }: { scopeQuery: string }) {
         e.preventDefault();
         const n = v.trim().replace(/^q-?/i, "");
         if (!/^\d+$/.test(n)) return;
-        router.push(`/questions/Q-${n.padStart(4, "0")}?${scopeQuery}`);
+        router.push(L(`/questions/Q-${n.padStart(4, "0")}?${scopeQuery}`));
         setV("");
       }}
     >

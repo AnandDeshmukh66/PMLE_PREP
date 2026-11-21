@@ -4,11 +4,13 @@
  *
  *   DATABASE_URL="postgresql://..." npm run db:copy-to-postgres -- --from data/pmle.db
  *
- * The target must already have the schema (npm run db:migrate with the same DATABASE_URL) and contain no rows.
+ * The target must already have the schema (npm run db:migrate with the same DATABASE_URL) and contain no rows
+ * other than the certification/version seed rows the migrations create (those are replaced by the source rows).
  */
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { datasourceUrlOf, tableRef } from "../lib/bulk";
 
 type Field = (typeof Prisma.dmmf.datamodel.models)[number]["fields"][number];
 
@@ -17,9 +19,13 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-/** Parents before children, following required and optional foreign keys. */
+/** Optional foreign keys that close a cycle; inserted as null and set once every table is copied. */
+export const DEFERRED: Record<string, string[]> = { Certification: ["currentVersionId"] };
+
+/** Parents before children, following required and optional foreign keys (except DEFERRED ones). */
 export function insertionOrder(models: typeof Prisma.dmmf.datamodel.models): string[] {
-  const deps = new Map(models.map((m) => [m.name, new Set(m.fields.filter((f) => f.relationFromFields?.length && f.type !== m.name).map((f) => f.type))]));
+  const deferredRelation = (m: string, f: Field) => (f.relationFromFields ?? []).some((x) => DEFERRED[m]?.includes(x));
+  const deps = new Map(models.map((m) => [m.name, new Set(m.fields.filter((f) => f.relationFromFields?.length && f.type !== m.name && !deferredRelation(m.name, f)).map((f) => f.type))]));
   const out: string[] = [];
   const seen = new Set<string>();
   const visit = (name: string, stack: Set<string>) => {
@@ -48,6 +54,8 @@ export function convert(value: unknown, f: Field): unknown {
       return Number(value);
     case "BigInt":
       return BigInt(value as number);
+    case "Bytes":
+      return value instanceof Uint8Array ? Buffer.from(value) : Buffer.from(String(value));
     default:
       return value;
   }
@@ -64,10 +72,15 @@ async function main() {
   const byName = new Map(models.map((m) => [m.name, m]));
   const delegate = (name: string) => (db as unknown as Record<string, { count: () => Promise<number>; createMany: (a: { data: unknown[] }) => Promise<unknown> }>)[name[0].toLowerCase() + name.slice(1)];
 
+  const seedOnly = ["Certification", "ContentVersion"];
   for (const name of order) {
     const n = await delegate(name).count();
-    if (n > 0) throw new Error(`Target table ${name} already has ${n} rows. Copy only into an empty, freshly migrated database.`);
+    if (n > 0 && !seedOnly.includes(name)) throw new Error(`Target table ${name} already has ${n} rows. Copy only into an empty, freshly migrated database.`);
   }
+  // Only the migrations' seed rows can be present here (every content table is empty), so they can be replaced.
+  await db.certification.updateMany({ data: { currentVersionId: null } });
+  await db.contentVersion.deleteMany({});
+  await db.certification.deleteMany({});
 
   const counts: Record<string, number> = {};
   await db.$transaction(
@@ -77,11 +90,24 @@ async function main() {
         const model = byName.get(name)!;
         const scalars = model.fields.filter((f) => f.kind === "scalar" || f.kind === "enum");
         const rows = src.prepare(`SELECT * FROM "${name}"`).all() as Record<string, unknown>[];
-        const data = rows.map((r) => Object.fromEntries(scalars.map((f) => [f.name, convert(r[f.name], f)])));
+        const deferred = DEFERRED[name] ?? [];
+        const data = rows.map((r) => Object.fromEntries(scalars.map((f) => [f.name, deferred.includes(f.name) ? null : convert(r[f.name], f)])));
         for (let i = 0; i < data.length; i += 1000) await t(name).createMany({ data: data.slice(i, i + 1000) });
         counts[name] = data.length;
         const auto = scalars.find((f) => f.isId && typeof f.default === "object" && f.default !== null && "name" in f.default && f.default.name === "autoincrement");
-        if (auto && data.length) await tx.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('"${name}"', '${auto.name}'), (SELECT MAX("${auto.name}") FROM "${name}"))`);
+        if (auto && data.length) {
+          const table = tableRef(name, datasourceUrlOf(tx));
+          await tx.$executeRawUnsafe(`SELECT setval(pg_get_serial_sequence('${table.replace(/'/g, "''")}', '${auto.name}'), (SELECT MAX("${auto.name}") FROM ${table}))`);
+        }
+      }
+      for (const [name, fields] of Object.entries(DEFERRED)) {
+        const model = byName.get(name)!;
+        const idField = model.fields.find((f) => f.isId)!.name;
+        const rows = src.prepare(`SELECT "${idField}", ${fields.map((f) => `"${f}"`).join(", ")} FROM "${name}"`).all() as Record<string, unknown>[];
+        for (const r of rows) {
+          const data = Object.fromEntries(fields.map((f) => [f, r[f] ?? null]));
+          if (Object.values(data).some((v) => v !== null)) await (tx as unknown as Record<string, { update: (a: unknown) => Promise<unknown> }>)[name[0].toLowerCase() + name.slice(1)].update({ where: { [idField]: r[idField] }, data });
+        }
       }
     },
     { timeout: 30 * 60_000, maxWait: 60_000 },

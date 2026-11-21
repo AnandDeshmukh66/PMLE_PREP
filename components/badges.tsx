@@ -1,6 +1,6 @@
 import { Badge } from "./ui";
+import { sourceShort } from "@/lib/cert-rules";
 import { LEGACY_LABEL } from "@/lib/filters";
-import { DOMAIN_SHORT } from "@/lib/utils";
 import { VERIFICATION_HELP, VERIFICATION_LABEL, type Verification } from "@/lib/verification";
 
 export function AlignmentBadge({ score, band }: { score: number; band?: string }) {
@@ -33,22 +33,23 @@ export function LegacyBadge({ status }: { status: string }) {
   );
 }
 
-export function DomainBadge({ domain, objective }: { domain: number | null; objective?: string | null }) {
+export function DomainBadge({ domain, objective, title }: { domain: number | null; objective?: string | null; title?: string }) {
   if (!domain) return <Badge tone="outline">Unmapped</Badge>;
   return (
-    <Badge tone="neutral" title={`Domain ${domain}: ${DOMAIN_SHORT[domain]}`}>
+    <Badge tone="neutral" title={title ? `Domain ${domain}: ${title}` : `Domain ${domain}`}>
       D{domain}
       {objective ? <span className="text-faint">· {objective}</span> : null}
     </Badge>
   );
 }
 
-export function SourceBadges({ refs }: { refs: { source: string; qnum: number }[] }) {
+export function SourceBadges({ refs, sources = [] }: { refs: { source: string; qnum: number }[]; sources?: { id: string; name: string }[] }) {
+  const name = (id: string) => sources.find((s) => s.id === id)?.name ?? id;
   return (
     <span className="inline-flex flex-wrap gap-1">
       {refs.map((r) => (
-        <Badge key={`${r.source}:${r.qnum}`} tone="outline" title={r.source === "pdf" ? `PDF question ${r.qnum}` : `ExamPrepper question ${r.qnum}`}>
-          {r.source === "pdf" ? "PDF" : "EP"} {r.qnum}
+        <Badge key={`${r.source}:${r.qnum}`} tone="outline" title={`${name(r.source)} question ${r.qnum}`}>
+          {sourceShort(r.source, name(r.source))} {r.qnum}
         </Badge>
       ))}
     </span>

@@ -25,74 +25,107 @@ import {
   Globe,
   Library,
   Eye,
+  LayoutGrid,
+  SlidersHorizontal,
+  History,
 } from "lucide-react";
 import { SaveIndicator } from "@/components/sync-provider";
 import { cn } from "@/lib/utils";
 
-type Counts = { all: number; common: number; pdf: number; examprepper: number; marked: number; flagged: number; incorrect: number; bookmarked: number; issues: number; daysLeft: number | null };
+export type SidebarCounts = { all: number; common: number; marked: number; flagged: number; incorrect: number; bookmarked: number; issues: number; daysLeft: number | null };
+export type SidebarSource = { id: string; name: string; kind: string; count: number };
+export type SidebarCert = { slug: string; code: string; name: string; versionLabel: string | null; published: boolean };
 
-const groups = (c: Counts) => [
+type Item = { href: string; label: string; icon: typeof Library; count?: number; badge?: string; exact?: boolean };
+
+function certGroups(base: string, c: SidebarCounts, sources: SidebarSource[], showData: boolean, published: boolean): { label: string | null; items: Item[] }[] {
+  const study = published
+    ? [
+        {
+          label: null,
+          items: [
+            { href: base, label: "Dashboard", icon: LayoutDashboard, exact: true },
+            { href: `${base}/plan`, label: "Study Plan", icon: CalendarClock, badge: c.daysLeft !== null && c.daysLeft >= 0 ? `${c.daysLeft}d` : undefined },
+            { href: `${base}/practice`, label: "Practice", icon: GraduationCap },
+            { href: `${base}/mock`, label: "Mock Examination", icon: Timer },
+          ],
+        },
+        {
+          label: "Question bank",
+          items: [
+            { href: `${base}/questions`, label: "All Questions", icon: Library, count: c.all },
+            ...(sources.length > 1 ? [{ href: `${base}/common`, label: "Common Questions", icon: Layers, count: c.common }] : []),
+            ...sources.map((s) => ({ href: `${base}/sources/${s.id}`, label: `${s.name} Questions`, icon: s.kind === "website" ? Globe : Files, count: s.count })),
+          ],
+        },
+        {
+          label: "Review",
+          items: [
+            { href: `${base}/review`, label: "Marked for Review", icon: Eye, count: c.marked },
+            { href: `${base}/flagged`, label: "Flagged Questions", icon: Flag, count: c.flagged },
+            { href: `${base}/incorrect`, label: "Incorrect Questions", icon: XCircle, count: c.incorrect },
+            { href: `${base}/bookmarks`, label: "Bookmarks", icon: Bookmark, count: c.bookmarked },
+          ],
+        },
+        {
+          label: "Study",
+          items: [
+            { href: `${base}/theory`, label: "Theory Checklist", icon: ListChecks },
+            { href: `${base}/blueprint`, label: "Exam Blueprint", icon: Map },
+            { href: `${base}/analytics`, label: "Analytics", icon: BarChart3 },
+            { href: `${base}/history`, label: "Version History", icon: History },
+          ],
+        },
+      ]
+    : [];
+  return [
+    ...study,
+    {
+      label: "Content",
+      items: [
+        ...(published ? [{ href: `${base}/data-quality`, label: "Data Quality", icon: Database, count: c.issues }] : []),
+        ...(showData ? [{ href: `${base}/data`, label: "Data Settings", icon: SlidersHorizontal }] : []),
+      ],
+    },
+    {
+      label: null,
+      items: [
+        { href: "/", label: "All certifications", icon: LayoutGrid, exact: true },
+        { href: "/settings", label: "Settings", icon: Settings },
+      ],
+    },
+  ].filter((g) => g.items.length);
+}
+
+const homeGroups: { label: string | null; items: Item[] }[] = [
   {
     label: null,
     items: [
-      { href: "/", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/plan", label: "Study Plan", icon: CalendarClock, badge: c.daysLeft !== null && c.daysLeft >= 0 ? `${c.daysLeft}d` : undefined },
-      { href: "/practice", label: "Practice", icon: GraduationCap },
-      { href: "/mock", label: "Mock Examination", icon: Timer },
-    ],
-  },
-  {
-    label: "Question bank",
-    items: [
-      { href: "/questions", label: "All Questions", icon: Library, count: c.all },
-      { href: "/common", label: "Common Questions", icon: Layers, count: c.common },
-      { href: "/pdf", label: "PDF Questions", icon: Files, count: c.pdf },
-      { href: "/examprepper", label: "ExamPrepper Questions", icon: Globe, count: c.examprepper },
-    ],
-  },
-  {
-    label: "Review",
-    items: [
-      { href: "/review", label: "Marked for Review", icon: Eye, count: c.marked },
-      { href: "/flagged", label: "Flagged Questions", icon: Flag, count: c.flagged },
-      { href: "/incorrect", label: "Incorrect Questions", icon: XCircle, count: c.incorrect },
-      { href: "/bookmarks", label: "Bookmarks", icon: Bookmark, count: c.bookmarked },
-    ],
-  },
-  {
-    label: "Study",
-    items: [
-      { href: "/theory", label: "Theory Checklist", icon: ListChecks },
-      { href: "/blueprint", label: "Exam Blueprint", icon: Map },
-      { href: "/analytics", label: "Analytics", icon: BarChart3 },
-    ],
-  },
-  {
-    label: "System",
-    items: [
-      { href: "/data-quality", label: "Data Quality", icon: Database, count: c.issues },
+      { href: "/", label: "Certifications", icon: LayoutGrid, exact: true },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
   },
 ];
 
-function isActive(path: string, href: string) {
-  if (href === "/") return path === "/";
-  if (href === "/questions") return path === "/questions" || (path.startsWith("/questions/") && false);
-  return path === href || path.startsWith(href + "/");
+function isActive(path: string, it: Item) {
+  if (it.exact) return path === it.href;
+  return path === it.href || path.startsWith(it.href + "/");
 }
 
-export function Sidebar({ counts, email }: { counts: Counts; email: string }) {
+/** Navigation for one certification (cert set) or for the certification home and global pages (cert null). */
+export function Sidebar({ email, cert = null, counts, sources = [], showData = false }: { email: string; cert?: SidebarCert | null; counts?: SidebarCounts; sources?: SidebarSource[]; showData?: boolean }) {
   const path = usePathname();
   const [open, setOpen] = useState(false);
+  const base = cert ? `/c/${cert.slug}` : "/";
+  const groups = cert && counts ? certGroups(base, counts, sources, showData, cert.published) : homeGroups;
   const nav = (
     <nav aria-label="Main" className="flex flex-col gap-5 px-3 pb-6">
-      {groups(counts).map((g, gi) => (
+      {groups.map((g, gi) => (
         <div key={gi}>
           {g.label && <div className="mb-1.5 px-2.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">{g.label}</div>}
           <ul className="flex flex-col gap-0.5">
             {g.items.map((it) => {
-              const active = isActive(path, it.href);
+              const active = isActive(path, it);
               const Icon = it.icon;
               return (
                 <li key={it.href}>
@@ -107,8 +140,8 @@ export function Sidebar({ counts, email }: { counts: Counts; email: string }) {
                   >
                     <Icon className={cn("size-4 shrink-0", active ? "text-accent" : "text-faint group-hover:text-muted")} strokeWidth={1.8} />
                     <span className="truncate">{it.label}</span>
-                    {"count" in it && it.count !== undefined && it.count > 0 && <span className="ml-auto text-[11px] tabular-nums text-faint">{it.count}</span>}
-                    {"badge" in it && it.badge && <span className="ml-auto rounded bg-accent-soft px-1.5 text-[10.5px] font-medium text-accent">{it.badge}</span>}
+                    {it.count !== undefined && it.count > 0 && <span className="ml-auto text-[11px] tabular-nums text-faint">{it.count}</span>}
+                    {it.badge && <span className="ml-auto rounded bg-accent-soft px-1.5 text-[10.5px] font-medium text-accent">{it.badge}</span>}
                   </Link>
                 </li>
               );
@@ -119,13 +152,13 @@ export function Sidebar({ counts, email }: { counts: Counts; email: string }) {
     </nav>
   );
   const brand = (
-    <Link href="/" className="flex items-center gap-2.5 px-5 py-5">
+    <Link href={base} className="flex items-center gap-2.5 px-5 py-5">
       <div className="flex size-7 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent-2 shadow-[0_4px_14px_-4px_rgb(107_140_255/0.6)]">
         <BookOpenCheck className="size-4 text-white" strokeWidth={2} />
       </div>
       <div className="leading-tight">
-        <div className="text-[13px] font-semibold text-fg">PMLE Prep</div>
-        <div className="text-[10.5px] text-faint">Exam guide · June 2026</div>
+        <div className="text-[13px] font-semibold text-fg">{cert ? `${cert.code} Prep` : "Certification Prep"}</div>
+        <div className="text-[10.5px] text-faint">{cert ? (cert.versionLabel ? `${cert.name} · ${cert.versionLabel}` : `${cert.name} · not published`) : "Learning & development"}</div>
       </div>
     </Link>
   );
@@ -143,8 +176,8 @@ export function Sidebar({ counts, email }: { counts: Counts; email: string }) {
         </div>
       </aside>
       <div className="sticky top-0 z-40 flex h-12 items-center justify-between border-b border-line bg-bg-2/90 px-3 glass lg:hidden">
-        <Link href="/" className="text-sm font-semibold">
-          PMLE Prep
+        <Link href={base} className="text-sm font-semibold">
+          {cert ? `${cert.code} Prep` : "Certification Prep"}
         </Link>
         <div className="ml-auto mr-2">
           <SaveIndicator compact />

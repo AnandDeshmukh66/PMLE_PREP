@@ -1,5 +1,6 @@
 "use client";
 
+import { useCert, useCertHref, useDomainTitle } from "@/components/cert-context";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronDown, CircleAlert, CircleHelp, ExternalLink, Eye, FileText, Info, XCircle } from "lucide-react";
@@ -7,7 +8,7 @@ import { submitAnswer, type SubmitResult } from "@/lib/actions";
 import { enqueue, type KeyEvent, newClientId, useKeyEvents } from "@/lib/sync-client";
 import { LEGACY_LABEL } from "@/lib/filters";
 import type { QuestionCardData } from "@/lib/question-data";
-import { cn, DOMAIN_SHORT } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { VERIFICATION_HELP, VERIFICATION_LABEL, type Verification } from "@/lib/verification";
 import { AlignmentBadge, DomainBadge, LegacyBadge, VerificationBadge } from "./badges";
 import { Badge, Button, Card, Kbd } from "./ui";
@@ -15,6 +16,7 @@ import { Badge, Button, Card, Kbd } from "./ui";
 const CLAIM_LABEL: Record<string, string> = {
   pdf_key: "PDF answer key",
   examprepper_answer: "ExamPrepper answer",
+  source_key: "Source answer key",
   examtopics_key: "ExamTopics original key",
   community_vote: "Community vote (top)",
   user_override: "Your resolution",
@@ -57,6 +59,7 @@ type Props = {
 };
 
 export function QuestionCard({ data, sessionId, immediateFeedback = true, keyboard = true, prevHref, nextHref, onAnswered, onNext, onPrev, initialSelected, initialResult }: Props) {
+  const L = useCertHref();
   const [selected, setSelected] = useState<string[]>(initialSelected ?? []);
   const [result, setResult] = useState<Pick<SubmitResult, "outcome" | "provisionalOutcome"> | null>(initialResult ?? null);
   const [revealed, setRevealed] = useState(false);
@@ -199,7 +202,7 @@ export function QuestionCard({ data, sessionId, immediateFeedback = true, keyboa
       <div className="px-5 pt-5 pb-4">
         {!data.active && data.mergedIntoCode && (
           <div className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
-            This canonical question was merged into <Link className="underline" href={`/questions/${data.mergedIntoCode}`}>{data.mergedIntoCode}</Link>.
+            This canonical question was merged into <Link className="underline" href={L(`/questions/${data.mergedIntoCode}`)}>{data.mergedIntoCode}</Link>.
           </div>
         )}
         <StemText stem={data.stem} images={data.images} />
@@ -315,7 +318,7 @@ export function QuestionCard({ data, sessionId, immediateFeedback = true, keyboa
                     <span className="font-semibold">{c.labels.join(", ") || "-"}</span>
                     {c.percent !== null && <span className="text-faint">({c.percent}%)</span>}
                     {c.sourceLabels.join("") !== c.labels.join("") && <span className="text-faint">source letters {c.sourceLabels.join(", ")}</span>}
-                    {c.incomplete && <Badge tone="warn">incomplete in PDF</Badge>}
+                    {c.incomplete && <Badge tone="warn">incomplete in source</Badge>}
                     {c.unmappable && <Badge tone="warn">unmappable</Badge>}
                   </li>
                 ))}
@@ -380,7 +383,7 @@ function Explanations({ data }: { data: QuestionCardData }) {
         <details className="group rounded-lg border border-line bg-surface-2/40">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted hover:text-fg-2">
             <ChevronDown className="size-3.5 transition-transform group-open:rotate-180" />
-            Community discussion ({community.length}), unverified opinions from ExamPrepper
+            Community discussion ({community.length}), unverified opinions from the source site
           </summary>
           <div className="space-y-2.5 px-3 pb-3">
             {community.map((c, i) => (
@@ -397,6 +400,10 @@ function Explanations({ data }: { data: QuestionCardData }) {
 }
 
 export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCardData; defaultOpen?: boolean }) {
+  const L = useCertHref();
+  const domainTitle = useDomainTitle();
+  const cert = useCert();
+  const src = (id: string) => cert.sources.find((s) => s.id === id) ?? { id, name: id, kind: "website", short: id.toUpperCase().slice(0, 4) };
   const legacy = data.legacyNotes;
   const conf = useMemo(() => ({ high: "High", medium: "Medium", low: "Low" })[data.classificationConfidence] ?? data.classificationConfidence, [data.classificationConfidence]);
   return (
@@ -404,7 +411,7 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
       <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-2.5 text-xs text-muted hover:text-fg-2">
         <Info className="size-3.5" />
         Source & classification
-        <span className="text-faint">· {data.occurrences.map((o) => `${o.source === "pdf" ? "PDF" : "EP"} Q${o.qnum}`).join(" · ")}</span>
+        <span className="text-faint">· {data.occurrences.map((o) => `${src(o.source).short} Q${o.qnum}`).join(" · ")}</span>
         <ChevronDown className="ml-auto size-3.5 transition-transform group-open:rotate-180" />
       </summary>
       <div className="grid gap-5 px-5 pt-1 pb-5 text-xs md:grid-cols-3">
@@ -413,15 +420,20 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
           <ul className="space-y-1.5">
             {data.occurrences.map((o) => (
               <li key={o.key} className="text-fg-2">
-                {o.source === "pdf" ? (
-                  <a className="inline-flex items-center gap-1 hover:text-accent" href={`/api/pdf#page=${o.page ?? 1}`} target="_blank" rel="noreferrer">
-                    <FileText className="size-3.5" /> PDF · Question {o.qnum} · Page {o.page}
+                {src(o.source).kind === "pdf" ? (
+                  <a className="inline-flex items-center gap-1 hover:text-accent" href={`/api/pdf?v=${encodeURIComponent(cert.versionId ?? "")}&s=${encodeURIComponent(o.source)}#page=${o.page ?? 1}`} target="_blank" rel="noreferrer">
+                    <FileText className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
+                    {o.page ? ` · Page ${o.page}` : ""}
                     {o.pageEnd && o.pageEnd !== o.page ? `–${o.pageEnd}` : ""}
                   </a>
-                ) : (
-                  <a className="inline-flex items-center gap-1 hover:text-accent" href={o.url ?? "#"} target="_blank" rel="noreferrer">
-                    <ExternalLink className="size-3.5" /> ExamPrepper · Question {o.qnum} · Page {o.url?.split("/").pop()}
+                ) : o.url ? (
+                  <a className="inline-flex items-center gap-1 hover:text-accent" href={o.url} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
                   </a>
+                ) : (
+                  <span className="inline-flex items-center gap-1">
+                    <FileText className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
+                  </span>
                 )}
                 {o.topicLabel && <div className="pl-5 text-faint">{o.topicLabel}</div>}
                 {o.issues.length > 0 && <div className="pl-5 text-warn">{o.issues.join(", ").replaceAll("_", " ")}</div>}
@@ -439,14 +451,14 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
               <div>
                 <dt className="inline text-faint">Domain </dt>
                 <dd className="inline">
-                  {data.domainNumber} · {DOMAIN_SHORT[data.domainNumber]}
+                  {data.domainNumber} · {domainTitle(data.domainNumber)}
                 </dd>
               </div>
               {data.objective && (
                 <div>
                   <dt className="inline text-faint">Objective </dt>
                   <dd className="inline">
-                    <Link className="hover:text-accent" href={`/questions?objective=${data.objective.code}`}>
+                    <Link className="hover:text-accent" href={L(`/questions?objective=${data.objective.code}`)}>
                       {data.objective.code}
                     </Link>{" "}
                     {data.objective.title}
@@ -477,7 +489,7 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
           )}
           <div className="mt-2 flex flex-wrap gap-1">
             {data.concepts.map((c) => (
-              <Link key={c.id} href={`/theory/${c.id}`} className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[11px] text-fg-2 hover:bg-violet-soft hover:text-accent-2">
+              <Link key={c.id} href={L(`/theory/${c.id}`)} className="rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[11px] text-fg-2 hover:bg-violet-soft hover:text-accent-2">
                 {c.name}
               </Link>
             ))}

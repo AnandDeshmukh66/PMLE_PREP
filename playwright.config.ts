@@ -28,6 +28,8 @@ export default defineConfig({
           DATABASE_URL: dbUrl,
           ALLOWED_EMAIL_DOMAINS: "acme-corp.com",
           ADMIN_EMAILS: "admin@acme-corp.com",
+          ADMIN_ACCESS_CODE: "e2e-access-code-123",
+          INGEST_BROWSER: "off",
           BACKUP_INTERVAL_HOURS: "0",
           BACKUP_DIR: path.join(__dirname, "data", "test-e2e-backups"),
         },

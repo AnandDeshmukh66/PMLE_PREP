@@ -1,5 +1,6 @@
 "use client";
 
+import { useCertHref } from "@/components/cert-context";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { ChevronLeft, ChevronRight, Flag as FlagIcon, Square } from "lucide-react";
@@ -25,6 +26,7 @@ export function PracticeRunner(props: {
   initialSelected: string[] | null;
   initialResult: Pick<SubmitResult, "outcome" | "provisionalOutcome"> | null;
 }) {
+  const L = useCertHref();
   const { sessionId, index, total, palette } = props;
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -34,7 +36,7 @@ export function PracticeRunner(props: {
     enqueue("sessionIndex", `index:${sessionId}`, { sessionId, index });
   }, [sessionId, index]);
 
-  const go = (i: number) => router.push(`/practice/${sessionId}?i=${i}`);
+  const go = (i: number) => router.push(L(`/practice/${sessionId}?i=${i}`));
   const finish = () =>
     start(async () => {
       setError(null);
@@ -44,14 +46,14 @@ export function PracticeRunner(props: {
       }
       const r = await callServer(() => finishPracticeSession(sessionId));
       if (!r.ok) return setError(r.error);
-      router.push(`/practice/${sessionId}?summary=1`);
+      router.push(L(`/practice/${sessionId}?summary=1`));
     });
   const abandon = () =>
     start(async () => {
       setError(null);
       const r = await callServer(() => abandonSession(sessionId));
       if (!r.ok) return setError(r.error);
-      router.push("/practice");
+      router.push(L("/practice"));
     });
   const next = () => (index < total - 1 ? go(index + 1) : finish());
   const unanswered = palette.filter((p) => !p.outcome).length;

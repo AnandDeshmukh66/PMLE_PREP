@@ -4,8 +4,11 @@
  *   file:...           -> prisma/schema.prisma            (SQLite, local development)
  *   postgres(ql)://... -> prisma/postgres/schema.prisma   (PostgreSQL, production)
  *
- * The PostgreSQL schema is generated from the SQLite one (only the provider differs), so the data model
+ * The PostgreSQL schema is generated from the SQLite one (only the datasource differs), so the data model
  * has a single source of truth. Each provider keeps its own migrations folder.
+ *
+ * PostgreSQL uses DATABASE_URL for queries and DIRECT_URL for migrations (Neon: the pooled "-pooler" host
+ * and the direct host). DIRECT_URL defaults to DATABASE_URL when it is not set.
  *
  *   node scripts/db.mjs generate
  *   node scripts/db.mjs migrate deploy
@@ -21,18 +24,17 @@ const sqliteSchema = path.join(root, "prisma", "schema.prisma");
 const pgSchema = path.join(root, "prisma", "postgres", "schema.prisma");
 
 function loadDotEnv() {
-  if (process.env.DATABASE_URL) return;
   const file = path.join(root, ".env");
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    const m = /^\s*DATABASE_URL\s*=\s*(.*)\s*$/.exec(line);
-    if (m) process.env.DATABASE_URL = m[1].replace(/^["']|["']$/g, "");
+    const m = /^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*(.*)\s*$/.exec(line);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
   }
 }
 
 export function syncPostgresSchema() {
   const src = fs.readFileSync(sqliteSchema, "utf8");
-  const out = src.replace(/datasource db \{[^}]*\}/, 'datasource db {\n  provider = "postgresql"\n  url      = env("DATABASE_URL")\n}');
+  const out = src.replace(/datasource db \{[^}]*\}/, 'datasource db {\n  provider  = "postgresql"\n  url       = env("DATABASE_URL")\n  directUrl = env("DIRECT_URL")\n}');
   if (out === src) throw new Error("Could not find the datasource block in prisma/schema.prisma");
   const header = "// GENERATED from prisma/schema.prisma by scripts/db.mjs - edit that file, not this one.\n";
   fs.mkdirSync(path.dirname(pgSchema), { recursive: true });
@@ -47,6 +49,7 @@ if (args[0] === "sync") process.exit(0);
 
 const url = process.env.DATABASE_URL ?? "";
 const postgres = /^postgres(ql)?:\/\//i.test(url);
+if (postgres && !process.env.DIRECT_URL) process.env.DIRECT_URL = url;
 const schema = postgres ? pgSchema : sqliteSchema;
 const bin = path.join(root, "node_modules", ".bin", process.platform === "win32" ? "prisma.cmd" : "prisma");
 const r = spawnSync(bin, [...args, "--schema", schema], { stdio: "inherit", cwd: root, env: process.env });

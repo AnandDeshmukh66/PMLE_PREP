@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { dismissFailures, enqueue, hasPending, initSync, onRemoteSave, startSync, useSyncStatus } from "@/lib/sync-client";
 import { cn } from "@/lib/utils";
 
-const RESUMABLE = /^\/(questions\/[^/]+|practice\/[^/]+|mock\/[^/]+|theory(\/[^/]+)?)$/;
+const RESUMABLE = /^\/c\/[a-z0-9-]+\/(questions\/[^/]+|practice\/[^/]+|mock\/[^/]+|theory(\/[^/]+)?)$/;
 
 /** Boots the per-user outbox, keeps other tabs fresh, and remembers where the user was for "Continue". */
 export function SyncProvider({ userId, sessionKey, children }: { userId: string; sessionKey: string; children: React.ReactNode }) {
@@ -38,7 +38,7 @@ export function SyncProvider({ userId, sessionKey, children }: { userId: string;
   }, [router]);
 
   useEffect(() => {
-    if (!RESUMABLE.test(path) || path === "/questions/new") return;
+    if (!RESUMABLE.test(path)) return;
     const t = setTimeout(() => enqueue("location", "location", { path: path + window.location.search }), 1500);
     return () => clearTimeout(t);
   }, [path]);

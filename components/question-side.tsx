@@ -1,5 +1,6 @@
 "use client";
 
+import { useCertHref } from "@/components/cert-context";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 import { Bookmark, Eye, Flag, Plus, Trash2 } from "lucide-react";
@@ -93,6 +94,7 @@ function NoteEditor({ questionId, note, onRemove, autoFocus }: { questionId: num
 }
 
 export function QuestionSide({ data }: { data: QuestionCardData }) {
+  const L = useCertHref();
   const [flags, setFlag] = useFlags(data.id, data.flags);
   const [reason, setReason] = useState(data.flags.flagReason ?? "");
   const [notes, setNotes] = useState<NoteEntry[]>(() => data.notes.map((n) => ({ clientId: n.clientId ?? `server-${n.id}`, id: n.id, content: n.content, updatedAt: n.updatedAt })));
@@ -178,7 +180,7 @@ export function QuestionSide({ data }: { data: QuestionCardData }) {
         <div className="flex flex-col gap-1 px-3 pb-3">
           {data.concepts.length === 0 && <p className="px-2 text-xs text-faint">No linked concepts.</p>}
           {data.concepts.map((c) => (
-            <Link key={c.id} href={`/theory/${c.id}`} className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs text-fg-2 hover:bg-white/[0.04]">
+            <Link key={c.id} href={L(`/theory/${c.id}`)} className="flex items-center justify-between rounded-lg px-2 py-1.5 text-xs text-fg-2 hover:bg-white/[0.04]">
               <span className="truncate">{c.name}</span>
               <Badge tone={c.status === "completed" ? "ok" : c.status === "in_progress" ? "accent" : "outline"}>{c.status.replace("_", " ")}</Badge>
             </Link>

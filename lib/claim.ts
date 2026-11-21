@@ -39,14 +39,14 @@ export async function claimLegacyProgress(db: PrismaClient, rawEmail: string): P
       if (takenNotes.length) sum.conflicts += (await tx.questionNote.deleteMany({ where: { userId: from, clientId: { in: takenNotes } } })).count;
       sum.notes = (await tx.questionNote.updateMany({ where: { userId: from }, data: { userId: to } })).count;
 
-      const myTheory = new Map((await tx.theoryProgress.findMany({ where: { userId: to } })).map((t) => [t.conceptId, t]));
+      const myTheory = new Map((await tx.theoryProgress.findMany({ where: { userId: to } })).map((t) => [`${t.versionId}|${t.conceptId}`, t]));
       for (const t of await tx.theoryProgress.findMany({ where: { userId: from } })) {
-        const mineT = myTheory.get(t.conceptId);
+        const mineT = myTheory.get(`${t.versionId}|${t.conceptId}`);
         if (!mineT) {
-          await tx.theoryProgress.create({ data: { userId: to, conceptId: t.conceptId, status: t.status, confidence: t.confidence, notes: t.notes, updatedAt: t.updatedAt, clientUpdatedAt: t.clientUpdatedAt } });
+          await tx.theoryProgress.create({ data: { userId: to, versionId: t.versionId, conceptId: t.conceptId, status: t.status, confidence: t.confidence, notes: t.notes, updatedAt: t.updatedAt, clientUpdatedAt: t.clientUpdatedAt } });
           sum.theory++;
         } else {
-          if (t.updatedAt > mineT.updatedAt) await tx.theoryProgress.update({ where: { userId_conceptId: { userId: to, conceptId: t.conceptId } }, data: { status: t.status, confidence: t.confidence, notes: t.notes } });
+          if (t.updatedAt > mineT.updatedAt) await tx.theoryProgress.update({ where: { userId_versionId_conceptId: { userId: to, versionId: t.versionId, conceptId: t.conceptId } }, data: { status: t.status, confidence: t.confidence, notes: t.notes } });
           sum.conflicts++;
         }
       }
@@ -54,9 +54,9 @@ export async function claimLegacyProgress(db: PrismaClient, rawEmail: string): P
 
       sum.sessions = (await tx.practiceSession.updateMany({ where: { userId: from }, data: { userId: to } })).count;
 
-      const myTasks = new Set((await tx.studyTaskCompletion.findMany({ where: { userId: to }, select: { date: true, taskKey: true } })).map((t) => `${t.date}|${t.taskKey}`));
+      const myTasks = new Set((await tx.studyTaskCompletion.findMany({ where: { userId: to }, select: { versionId: true, date: true, taskKey: true } })).map((t) => `${t.versionId}|${t.date}|${t.taskKey}`));
       for (const t of await tx.studyTaskCompletion.findMany({ where: { userId: from } })) {
-        if (myTasks.has(`${t.date}|${t.taskKey}`)) {
+        if (myTasks.has(`${t.versionId}|${t.date}|${t.taskKey}`)) {
           await tx.studyTaskCompletion.delete({ where: { id: t.id } });
           sum.conflicts++;
         }

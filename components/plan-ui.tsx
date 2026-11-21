@@ -1,5 +1,6 @@
 "use client";
 
+import { useCert, useCertHref } from "@/components/cert-context";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 import { BookOpen, Check, ClipboardCheck, Coffee, ListChecks, Timer } from "lucide-react";
@@ -53,13 +54,17 @@ export function ExamDateForm({ examDate, dailyHours, compact }: { examDate: stri
 }
 
 export function TaskList({ date, tasks, doneKeys, disabled }: { date: string; tasks: PlanTask[]; doneKeys: string[]; disabled?: boolean }) {
+  const cert = useCert();
+  const L = useCertHref();
+  const versionId = cert.versionId!;
+  const taskKey = (k: string) => `task:${versionId}:${date}:${k}`;
   const [done, setDoneKeys] = useServerState(doneKeys, (local, server) => [
-    ...server.filter((k) => !hasPending(`task:${date}:${k}`) || local.includes(k)),
-    ...local.filter((k) => !server.includes(k) && hasPending(`task:${date}:${k}`)),
+    ...server.filter((k) => !hasPending(taskKey(k)) || local.includes(k)),
+    ...local.filter((k) => !server.includes(k) && hasPending(taskKey(k))),
   ]);
   const setDone = (key: string, on: boolean) => {
     setDoneKeys((s) => (on ? [...new Set([...s, key])] : s.filter((k) => k !== key)));
-    enqueue("task", `task:${date}:${key}`, { date, taskKey: key, done: on });
+    enqueue("task", taskKey(key), { versionId, date, taskKey: key, done: on });
   };
   return (
     <ul className="flex flex-col gap-1.5">
@@ -68,7 +73,7 @@ export function TaskList({ date, tasks, doneKeys, disabled }: { date: string; ta
         const isDone = done.includes(t.key);
         return (
           <li key={t.key} className={cn("group flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors", isDone ? "border-ok/20 bg-ok-soft/30" : "border-line bg-surface-2/40")} data-testid="plan-task">
-            <TaskStale syncKey={`task:${date}:${t.key}`} onStale={(on) => setDoneKeys((s) => (on ? [...new Set([...s, t.key])] : s.filter((k) => k !== t.key)))} />
+            <TaskStale syncKey={taskKey(t.key)} onStale={(on) => setDoneKeys((s) => (on ? [...new Set([...s, t.key])] : s.filter((k) => k !== t.key)))} />
             <button
               type="button"
               role="checkbox"
@@ -84,7 +89,7 @@ export function TaskList({ date, tasks, doneKeys, disabled }: { date: string; ta
             <div className="min-w-0 flex-1">
               <div className={cn("text-[13px] font-medium", isDone ? "text-muted line-through" : "text-fg")}>
                 {t.href ? (
-                  <Link href={t.href} className="hover:text-accent">
+                  <Link href={L(t.href)} className="hover:text-accent">
                     {t.title}
                   </Link>
                 ) : (

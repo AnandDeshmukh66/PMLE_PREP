@@ -1,29 +1,34 @@
 import { createId } from "./id";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import { LEGACY_PMLE_VERSION_ID, VISIBLE_STATUSES } from "./cert-rules";
 import { parseJson } from "./json";
 import { SETTINGS_SCHEMA } from "./settings";
 
 export const PROGRESS_FORMAT = "pmle-prep-progress";
-export const PROGRESS_VERSION = 2;
+/** v3: every item names its content version (v2 files predate versions and always mean PMLE 2026). */
+export const PROGRESS_VERSION = 3;
 export const MAX_BACKUP_BYTES = 25 * 1024 * 1024;
 
-type QRef = { code: string; sourceKeys: string[] };
+type QRef = { versionId: string; code: string; sourceKeys: string[] };
+export type VersionRef = { id: string; certification: string; label: string };
 
 export type ProgressExport = {
   format: typeof PROGRESS_FORMAT;
   version: number;
   exportedAt: string;
   account: { email: string; createdAt: string };
+  versions: VersionRef[];
   counts: Record<string, number>;
   attempts: (QRef & { clientId: string | null; sessionKey: string | null; mode: string; selectedLabels: string[]; isCorrect: boolean | null; partial: boolean; provisionalCorrect: boolean | null; verificationAtTime: string; correctLabelsAtTime: string[] | null; elapsedMs: number; regraded: boolean; createdAt: string })[];
   flags: (QRef & { kind: string; reason: string | null; createdAt: string; updatedAt: string })[];
   notes: (QRef & { clientId: string | null; content: string; createdAt: string; updatedAt: string })[];
-  theory: { conceptId: string; status: string; confidence: string | null; notes: string | null; updatedAt: string }[];
-  studyTasks: { date: string; taskKey: string; completedAt: string }[];
+  theory: { versionId: string; conceptId: string; status: string; confidence: string | null; notes: string | null; updatedAt: string }[];
+  studyTasks: { versionId: string; date: string; taskKey: string; completedAt: string }[];
   settings: Record<string, unknown>;
   sessions: {
     key: string;
+    versionId: string;
     kind: string;
     mode: string;
     title: string;
@@ -41,12 +46,16 @@ export type ProgressExport = {
   }[];
 };
 
-/** Complete export of one user's data. Questions are referenced by source keys (e.g. "pdf:84"), which survive bank rebuilds and deployments. */
+/**
+ * Complete export of one user's data across all certifications and versions. Questions are referenced by
+ * version + source keys (e.g. "pdf:84"), which survive bank rebuilds and deployments.
+ */
 export async function exportProgress(db: PrismaClient, userId: string): Promise<ProgressExport> {
-  const [user, qs, occ, attempts, flags, notes, theory, tasks, settings, sessions] = await Promise.all([
+  const [user, versions, qs, occ, attempts, flags, notes, theory, tasks, settings, sessions] = await Promise.all([
     db.user.findUniqueOrThrow({ where: { id: userId } }),
-    db.canonicalQuestion.findMany({ select: { id: true, code: true } }),
-    db.sourceOccurrence.findMany({ select: { sourceKey: true, canonicalId: true } }),
+    db.contentVersion.findMany({ where: { status: { in: [...VISIBLE_STATUSES] } }, select: { id: true, label: true, certification: { select: { slug: true } } } }),
+    db.canonicalQuestion.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { id: true, code: true, versionId: true } }),
+    db.sourceOccurrence.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { sourceKey: true, canonicalId: true } }),
     db.questionAttempt.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
     db.questionFlag.findMany({ where: { userId, active: true } }),
     db.questionNote.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
@@ -55,16 +64,17 @@ export async function exportProgress(db: PrismaClient, userId: string): Promise<
     db.setting.findMany({ where: { userId } }),
     db.practiceSession.findMany({ where: { userId }, orderBy: { startedAt: "asc" }, include: { questions: { orderBy: { order: "asc" } } } }),
   ]);
-  const code = new Map(qs.map((q) => [q.id, q.code]));
+  const qById = new Map(qs.map((q) => [q.id, q]));
   const keys = new Map<number, string[]>();
   for (const o of occ) if (o.canonicalId) (keys.get(o.canonicalId) ?? keys.set(o.canonicalId, []).get(o.canonicalId)!).push(o.sourceKey);
-  const ref = (id: number): QRef => ({ code: code.get(id) ?? "", sourceKeys: (keys.get(id) ?? []).sort() });
+  const ref = (id: number): QRef => ({ versionId: qById.get(id)?.versionId ?? "", code: qById.get(id)?.code ?? "", sourceKeys: (keys.get(id) ?? []).sort() });
   const iso = (d: Date | null) => (d ? d.toISOString() : null);
   return {
     format: PROGRESS_FORMAT,
     version: PROGRESS_VERSION,
     exportedAt: new Date().toISOString(),
     account: { email: user.email, createdAt: user.createdAt.toISOString() },
+    versions: versions.map((v) => ({ id: v.id, certification: v.certification.slug, label: v.label })),
     counts: { attempts: attempts.length, flags: flags.length, notes: notes.length, theory: theory.length, studyTasks: tasks.length, settings: settings.length, sessions: sessions.length },
     attempts: attempts.map((a) => ({
       ...ref(a.questionId),
@@ -83,11 +93,12 @@ export async function exportProgress(db: PrismaClient, userId: string): Promise<
     })),
     flags: flags.map((f) => ({ ...ref(f.questionId), kind: f.kind, reason: f.reason, createdAt: f.createdAt.toISOString(), updatedAt: f.updatedAt.toISOString() })),
     notes: notes.map((n) => ({ ...ref(n.questionId), clientId: n.clientId, content: n.content, createdAt: n.createdAt.toISOString(), updatedAt: n.updatedAt.toISOString() })),
-    theory: theory.map((t) => ({ conceptId: t.conceptId, status: t.status, confidence: t.confidence, notes: t.notes, updatedAt: t.updatedAt.toISOString() })),
-    studyTasks: tasks.map((t) => ({ date: t.date, taskKey: t.taskKey, completedAt: t.completedAt.toISOString() })),
+    theory: theory.map((t) => ({ versionId: t.versionId, conceptId: t.conceptId, status: t.status, confidence: t.confidence, notes: t.notes, updatedAt: t.updatedAt.toISOString() })),
+    studyTasks: tasks.map((t) => ({ versionId: t.versionId, date: t.date, taskKey: t.taskKey, completedAt: t.completedAt.toISOString() })),
     settings: Object.fromEntries(settings.map((s) => [s.key, parseJson(s.value, null)])),
     sessions: sessions.map((s) => ({
       key: s.id,
+      versionId: s.versionId,
       kind: s.kind,
       mode: s.mode,
       title: s.title,
@@ -122,12 +133,14 @@ const MAX_ITEMS = 200_000;
 const Str = (max: number) => z.string().max(max);
 const IsoDate = z.string().max(40).refine((s) => !Number.isNaN(Date.parse(s)), "invalid date");
 const LabelList = z.array(z.string().regex(/^[A-H]$/)).max(8);
-const Ref = { code: Str(20).default(""), sourceKeys: z.array(Str(40)).max(10).default([]) };
+const VersionField = Str(40).optional();
+const Ref = { versionId: VersionField, code: Str(20).default(""), sourceKeys: z.array(Str(120)).max(10).default([]) };
 const ClientKey = z.string().min(8).max(64).regex(/^[\w-]+$/).nullable().optional();
 
 const BackupSchema = z.object({
   format: z.literal(PROGRESS_FORMAT),
   version: z.number().int().min(1).max(PROGRESS_VERSION),
+  versions: z.array(z.object({ id: Str(40), certification: Str(40), label: Str(40) })).max(1000).default([]),
   attempts: z
     .array(
       z.object({
@@ -159,6 +172,7 @@ const BackupSchema = z.object({
   theory: z
     .array(
       z.object({
+        versionId: VersionField,
         conceptId: Str(80),
         status: z.enum(["not_started", "in_progress", "completed"]).catch("not_started"),
         confidence: z.enum(["low", "medium", "high"]).nullable().catch(null),
@@ -169,7 +183,7 @@ const BackupSchema = z.object({
     .max(10_000)
     .default([]),
   studyTasks: z
-    .array(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), taskKey: Str(120), completedAt: IsoDate }))
+    .array(z.object({ versionId: VersionField, date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), taskKey: Str(120), completedAt: IsoDate }))
     .max(MAX_ITEMS)
     .default([]),
   settings: z.record(Str(60), z.unknown()).default({}),
@@ -177,6 +191,7 @@ const BackupSchema = z.object({
     .array(
       z.object({
         key: Str(40),
+        versionId: VersionField,
         kind: z.enum(["practice", "mock"]),
         mode: Str(40),
         title: Str(200),
@@ -254,23 +269,38 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
     ignoredShared: (raw.answerOverrides?.length ?? 0) + (raw.manualClassifications?.length ?? 0) + (raw.duplicateDecisions?.length ?? 0),
   };
 
-  const [occ, qs, concepts] = await Promise.all([
-    db.sourceOccurrence.findMany({ select: { sourceKey: true, canonicalId: true } }),
-    db.canonicalQuestion.findMany({ select: { id: true, code: true, active: true, mergedIntoId: true } }),
-    db.theoryConcept.findMany({ select: { id: true } }),
+  const visible = { version: { status: { in: [...VISIBLE_STATUSES] } } };
+  const [versions, occ, qs, concepts] = await Promise.all([
+    db.contentVersion.findMany({ where: { status: { in: [...VISIBLE_STATUSES] } }, select: { id: true, label: true, certification: { select: { slug: true } } } }),
+    db.sourceOccurrence.findMany({ where: visible, select: { versionId: true, sourceKey: true, canonicalId: true } }),
+    db.canonicalQuestion.findMany({ where: visible, select: { id: true, versionId: true, code: true, active: true, mergedIntoId: true } }),
+    db.theoryConcept.findMany({ where: visible, select: { versionId: true, id: true } }),
   ]);
-  const byKey = new Map(occ.filter((o) => o.canonicalId).map((o) => [o.sourceKey, o.canonicalId!]));
-  const byCode = new Map(qs.map((q) => [q.code, q]));
-  const resolve = (r: QRef): number | null => {
+  // A backup's version id is used when it exists here; otherwise the same certification + label (another deployment).
+  const localIds = new Set(versions.map((v) => v.id));
+  const localByLabel = new Map(versions.map((v) => [`${v.certification.slug}|${v.label}`, v.id]));
+  const remote = new Map(d.versions.map((v) => [v.id, `${v.certification}|${v.label}`]));
+  const versionOf = (vid: string | undefined): string | null => {
+    const id = vid || LEGACY_PMLE_VERSION_ID;
+    if (localIds.has(id)) return id;
+    const label = remote.get(id);
+    return label ? (localByLabel.get(label) ?? null) : null;
+  };
+  const byKey = new Map(occ.filter((o) => o.canonicalId).map((o) => [`${o.versionId}|${o.sourceKey}`, o.canonicalId!]));
+  const byCode = new Map(qs.map((q) => [`${q.versionId}|${q.code}`, q]));
+  const versionOfQuestion = new Map(qs.map((q) => [q.id, q.versionId]));
+  const resolve = (r: { versionId?: string; code: string; sourceKeys: string[] }): number | null => {
+    const vid = versionOf(r.versionId);
+    if (!vid) return null;
     for (const k of r.sourceKeys) {
-      const id = byKey.get(k);
+      const id = byKey.get(`${vid}|${k}`);
       if (id) return id;
     }
-    const q = byCode.get(r.code);
+    const q = byCode.get(`${vid}|${r.code}`);
     if (!q) return null;
     return q.active ? q.id : (q.mergedIntoId ?? null);
   };
-  const conceptIds = new Set(concepts.map((c) => c.id));
+  const conceptIds = new Set(concepts.map((c) => `${c.versionId}|${c.id}`));
 
   await db.$transaction(
     async (tx) => {
@@ -285,10 +315,19 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
           continue;
         }
         const id = owner.has(s.key) || !/^[a-z0-9]{8,40}$/i.test(s.key) ? createId() : s.key;
+        const sessionVersion = versionOf(s.versionId);
+        if (!sessionVersion) {
+          sum.unmatched++;
+          continue;
+        }
         const seenQ = new Set<number>();
         const seenOrder = new Set<number>();
         const questions = s.questions.flatMap((q) => {
-          const qid = resolve(q);
+          const qid = resolve({ ...q, versionId: q.versionId ?? s.versionId });
+          if (qid && versionOfQuestion.get(qid) !== sessionVersion) {
+            sum.unmatched++;
+            return [];
+          }
           if (!qid) {
             sum.unmatched++;
             return [];
@@ -302,6 +341,7 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
           data: {
             id,
             userId,
+            versionId: sessionVersion,
             kind: s.kind,
             mode: s.mode,
             title: s.title,
@@ -415,25 +455,32 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
       for (const part of chunks(newNotes)) await tx.questionNote.createMany({ data: part });
       sum.notes = newNotes.length;
 
-      const existingTheory = new Map((await tx.theoryProgress.findMany({ where: { userId } })).map((t) => [t.conceptId, t]));
+      const existingTheory = new Map((await tx.theoryProgress.findMany({ where: { userId } })).map((t) => [`${t.versionId}|${t.conceptId}`, t]));
       for (const t of d.theory) {
-        if (!conceptIds.has(t.conceptId)) {
+        const versionId = versionOf(t.versionId);
+        if (!versionId || !conceptIds.has(`${versionId}|${t.conceptId}`)) {
           sum.unmatched++;
           continue;
         }
-        const ex = existingTheory.get(t.conceptId);
+        const ex = existingTheory.get(`${versionId}|${t.conceptId}`);
         if (ex && ex.updatedAt >= new Date(t.updatedAt)) continue;
         const data = { status: t.status, confidence: t.confidence, notes: t.notes };
-        if (ex) await tx.theoryProgress.update({ where: { userId_conceptId: { userId, conceptId: t.conceptId } }, data });
-        else await tx.theoryProgress.create({ data: { userId, conceptId: t.conceptId, ...data } });
+        if (ex) await tx.theoryProgress.update({ where: { userId_versionId_conceptId: { userId, versionId, conceptId: t.conceptId } }, data });
+        else await tx.theoryProgress.create({ data: { userId, versionId, conceptId: t.conceptId, ...data } });
         sum.theory++;
       }
 
-      const existingTasks = new Map((await tx.studyTaskCompletion.findMany({ where: { userId } })).map((t) => [`${t.date}|${t.taskKey}`, t]));
+      const existingTasks = new Set((await tx.studyTaskCompletion.findMany({ where: { userId }, select: { versionId: true, date: true, taskKey: true } })).map((t) => `${t.versionId}|${t.date}|${t.taskKey}`));
       for (const t of d.studyTasks) {
-        const ex = existingTasks.get(`${t.date}|${t.taskKey}`);
-        if (ex) continue;
-        await tx.studyTaskCompletion.create({ data: { userId, date: t.date, taskKey: t.taskKey, completedAt: new Date(t.completedAt) } });
+        const versionId = versionOf(t.versionId);
+        if (!versionId) {
+          sum.unmatched++;
+          continue;
+        }
+        const k = `${versionId}|${t.date}|${t.taskKey}`;
+        if (existingTasks.has(k)) continue;
+        existingTasks.add(k);
+        await tx.studyTaskCompletion.create({ data: { userId, versionId, date: t.date, taskKey: t.taskKey, completedAt: new Date(t.completedAt) } });
         sum.tasks++;
       }
 

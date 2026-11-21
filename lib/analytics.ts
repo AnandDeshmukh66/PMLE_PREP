@@ -50,14 +50,15 @@ export type ConceptStat = {
   lastPracticed: Date | null;
 };
 
-export async function loadAnalytics(userId: string) {
+/** Analytics for one content version: progress on other versions (including older releases) is kept separately. */
+export async function loadAnalytics(userId: string, versionId: string) {
   const [rows, domains, objectives, conceptRows, attempts, mocks] = await Promise.all([
-    loadQuestionRows(userId),
-    prisma.examDomain.findMany({ orderBy: { number: "asc" } }),
-    prisma.examObjective.findMany({ orderBy: { order: "asc" } }),
-    prisma.theoryConcept.findMany({ include: { progress: { where: { userId } } }, orderBy: { order: "asc" } }),
-    prisma.questionAttempt.findMany({ where: { userId }, orderBy: { createdAt: "asc" }, select: { questionId: true, isCorrect: true, partial: true, createdAt: true, elapsedMs: true, mode: true, provisionalCorrect: true } }),
-    prisma.practiceSession.findMany({ where: { userId, kind: "mock", status: "submitted" }, orderBy: { submittedAt: "asc" } }),
+    loadQuestionRows(userId, versionId),
+    prisma.examDomain.findMany({ where: { versionId }, orderBy: { number: "asc" } }),
+    prisma.examObjective.findMany({ where: { versionId }, orderBy: { order: "asc" } }),
+    prisma.theoryConcept.findMany({ where: { versionId }, include: { progress: { where: { userId } } }, orderBy: { order: "asc" } }),
+    prisma.questionAttempt.findMany({ where: { userId, question: { versionId } }, orderBy: { createdAt: "asc" }, select: { questionId: true, isCorrect: true, partial: true, createdAt: true, elapsedMs: true, mode: true, provisionalCorrect: true } }),
+    prisma.practiceSession.findMany({ where: { userId, versionId, kind: "mock", status: "submitted" }, orderBy: { submittedAt: "asc" } }),
   ]);
   const concepts = conceptRows.map(({ progress, ...c }) => ({ ...c, progress: progress[0] ?? null }));
   const agg = aggregate(
@@ -251,7 +252,7 @@ export function revisionQueue(a: Analytics, now = new Date()): RevisionItem[] {
 
 export function nextAction(a: Analytics): { title: string; detail: string; href: string } {
   const weakest = [...a.domainStats].filter((d) => d.accuracy !== null && d.gradedQuestions >= 5).sort((x, y) => (x.accuracy ?? 0) - (y.accuracy ?? 0))[0];
-  if (a.agg.totalAttempts === 0) return { title: "Start with a high-alignment practice set", detail: "20 questions most closely aligned to the June 2026 guide, with immediate feedback.", href: "/practice?mode=high_alignment" };
+  if (a.agg.totalAttempts === 0) return { title: "Start with a high-alignment practice set", detail: "20 questions most closely aligned to the current exam guide, with immediate feedback.", href: "/practice?mode=high_alignment" };
   const incorrect = a.rows.filter((r) => r.stats.latestCorrect === false).length;
   if (incorrect >= 15) return { title: `Retry ${incorrect} incorrect questions`, detail: "Clearing current mistakes is the fastest accuracy gain.", href: "/practice?mode=incorrect" };
   if (a.agg.attempted >= 120 && a.mockHistory.length === 0) return { title: "Take your first timed mock exam", detail: "60 questions in 120 minutes, balanced by official domain weights.", href: "/mock" };

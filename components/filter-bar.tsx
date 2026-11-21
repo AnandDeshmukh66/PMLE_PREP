@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { Search, X } from "lucide-react";
+import { useOptionalCert } from "@/components/cert-context";
 import { cn } from "@/lib/utils";
 
 const selectCls = "h-8 rounded-lg border border-line bg-surface-2 px-2 text-xs text-fg-2 outline-none hover:border-line-2 focus-visible:border-accent";
@@ -13,6 +14,9 @@ export function FilterBar({ conceptName, hideSource }: { conceptName?: string | 
   const sp = useSearchParams();
   const [pending, start] = useTransition();
   const [q, setQ] = useState(sp.get("q") ?? "");
+  const cert = useOptionalCert();
+  const sources = cert?.sources ?? [];
+  const domains = Object.entries(cert?.domains ?? {}).map(([n]) => Number(n));
 
   const set = (k: string, v: string | null) => {
     const p = new URLSearchParams(sp.toString());
@@ -41,7 +45,7 @@ export function FilterBar({ conceptName, hideSource }: { conceptName?: string | 
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search stems, options, topics, Q-0042, pdf 84, ep 136…"
+            placeholder={`Search stems, options, topics, Q-0042${sources.slice(0, 2).map((s) => `, ${s.id === "examprepper" ? "ep" : s.id} 12`).join("")}…`}
             className="h-9 w-full rounded-lg border border-line bg-surface-2 pr-3 pl-8 text-[13px] text-fg outline-none placeholder:text-faint focus-visible:border-accent"
             data-testid="search-input"
           />
@@ -52,25 +56,31 @@ export function FilterBar({ conceptName, hideSource }: { conceptName?: string | 
           <option value="alignment_asc">Alignment ↑</option>
           <option value="accuracy_asc">Lowest accuracy</option>
           <option value="recent">Recently attempted</option>
-          <option value="pdf_qnum">PDF question #</option>
-          <option value="examprepper_qnum">ExamPrepper question #</option>
+          {sources.map((s) => (
+            <option key={s.id} value={`qnum:${s.id}`}>
+              {s.name} question #
+            </option>
+          ))}
         </select>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select aria-label="Domain" className={selectCls} value={sp.get("domain") ?? ""} onChange={(e) => set("domain", e.target.value || null)}>
           <option value="">All domains</option>
-          {[1, 2, 3, 4, 5, 6].map((d) => (
+          {domains.map((d) => (
             <option key={d} value={d}>
               Domain {d}
             </option>
           ))}
         </select>
-        {!hideSource && (
+        {!hideSource && sources.length > 1 && (
           <select aria-label="Source" className={selectCls} value={sp.get("source") ?? ""} onChange={(e) => set("source", e.target.value || null)}>
             <option value="">Any source</option>
-            <option value="common">In both sources</option>
-            <option value="pdf_only">PDF only</option>
-            <option value="examprepper_only">ExamPrepper only</option>
+            <option value="common">In two or more sources</option>
+            {sources.map((s) => (
+              <option key={s.id} value={`only:${s.id}`}>
+                {s.name} only
+              </option>
+            ))}
           </select>
         )}
         <select aria-label="Attempt status" className={selectCls} value={sp.get("status") ?? ""} onChange={(e) => set("status", e.target.value || null)}>

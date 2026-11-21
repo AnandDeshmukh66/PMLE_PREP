@@ -1,5 +1,6 @@
 "use client";
 
+import { useCert, useCertHref } from "@/components/cert-context";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Play, Trash2 } from "lucide-react";
@@ -9,6 +10,8 @@ import { createPracticeFromList } from "@/lib/list-actions";
 import { Button } from "./ui";
 
 export function BankActions({ scope, query, ids, clearKind }: { scope: string; query: string; ids: number[]; clearKind?: "review" | "flag" | "bookmark" }) {
+  const L = useCertHref();
+  const cert = useCert();
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -38,10 +41,10 @@ export function BankActions({ scope, query, ids, clearKind }: { scope: string; q
         data-testid="practice-list"
         onClick={() =>
           start(async () => {
-            const res = await callServer(() => createPracticeFromList(scope, query));
+            const res = await callServer(() => createPracticeFromList(cert.slug, scope, query));
             if (!res.ok) return setMsg(res.error);
             const r = res.value;
-            if (r.id) router.push(`/practice/${r.id}`);
+            if (r.id) router.push(L(`/practice/${r.id}`));
             else setMsg(r.note ?? "Nothing to practice");
           })
         }

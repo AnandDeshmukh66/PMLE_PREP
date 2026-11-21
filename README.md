@@ -53,6 +53,7 @@ When the sources disagree, the question is labelled and not scored, so you're no
 
 ## What's inside?
 
+- **Certification home:** where you land after signing in. PMLE is ready; more certifications (PDE is listed) appear once an admin publishes their content.
 - **Dashboard:** progress, domain readiness, and "continue where you left off".
 - **Study Plan:** a day-by-day schedule up to your exam date.
 - **Practice:** focused sessions by domain, topic, mistakes or weak areas.
@@ -63,6 +64,7 @@ When the sources disagree, the question is labelled and not scored, so you're no
 - **Exam Blueprint and Analytics:** where the marks are, and where you stand.
 - **Data Quality:** how the bank was built, and how much to trust each answer.
 - **Settings:** preferences, Download My Backup, log out.
+- **Data Settings (admins only):** add certifications, import content, review and publish new versions. See [docs/INGESTION.md](docs/INGESTION.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## How it helps
 

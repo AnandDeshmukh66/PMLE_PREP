@@ -46,7 +46,7 @@ const SEND: { [K in SyncKind]: (args: Kinds[K], rev: number) => Promise<AnyAck> 
 };
 
 const MERGE: { [K in SyncKind]?: (older: Kinds[K], newer: Kinds[K]) => Kinds[K] } = {
-  theory: (o, n) => ({ conceptId: n.conceptId, patch: { ...o.patch, ...n.patch } }),
+  theory: (o, n) => ({ versionId: n.versionId ?? o.versionId, conceptId: n.conceptId, patch: { ...o.patch, ...n.patch } }),
   settings: (o, n) => ({ patch: { ...o.patch, ...n.patch } }),
   mockAnswer: (o, n) => ({ ...n, elapsedDeltaMs: o.elapsedDeltaMs + n.elapsedDeltaMs }),
   note: (o, n) => ({ ...n, id: n.id ?? o.id }),

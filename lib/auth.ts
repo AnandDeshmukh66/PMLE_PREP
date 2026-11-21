@@ -6,7 +6,17 @@ import { cache } from "react";
 import { parseAllowedDomains, parseList, SESSION_COOKIE, sessionTtlDays } from "./auth-rules";
 import { prisma } from "./db";
 
-export type CurrentUser = { id: string; email: string; isAdmin: boolean; sessionId: string };
+export type CurrentUser = {
+  id: string;
+  email: string;
+  /** On the ADMIN_EMAILS allowlist. Email alone is identification, not proof, so this grants nothing by itself. */
+  isAdmin: boolean;
+  /** This session confirmed the administrator access code (or step-up is exempt, see adminStepUp()). */
+  elevated: boolean;
+  /** May change shared content: allowlisted and elevated. */
+  canManageContent: boolean;
+  sessionId: string;
+};
 
 export function authConfig() {
   return {
@@ -17,7 +27,27 @@ export function authConfig() {
   };
 }
 
+/**
+ * Administrator step-up policy. With ADMIN_ACCESS_CODE set, an allowlisted user must enter it once per session
+ * before changing shared content. Without it, development builds allow allowlisted users through (and say so in
+ * the UI), while production fails closed: nobody can administer content until the code is configured.
+ */
+export function adminStepUp(): { mode: "code" | "exempt" | "disabled"; hours: number } {
+  const hours = Math.min(24, Math.max(1, Number(process.env.ADMIN_ELEVATION_HOURS) || 8));
+  if ((process.env.ADMIN_ACCESS_CODE ?? "").trim().length >= 8) return { mode: "code", hours };
+  return { mode: authConfig().production ? "disabled" : "exempt", hours };
+}
+
 export const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+
+/** Constant-time comparison of a submitted access code with ADMIN_ACCESS_CODE. */
+export function accessCodeMatches(submitted: string): boolean {
+  const expected = (process.env.ADMIN_ACCESS_CODE ?? "").trim();
+  if (expected.length < 8) return false;
+  const a = crypto.createHash("sha256").update(submitted.trim()).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 
 /** Secure cookies need HTTPS; plain-http localhost (local `npm run start`) must still work. */
 export async function cookieSecure(): Promise<boolean> {
@@ -56,7 +86,10 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
     const { sessionDays } = authConfig();
     await prisma.authSession.updateMany({ where: { id: s.id }, data: { lastUsedAt: new Date(now), expiresAt: new Date(now + sessionDays * 86_400_000) } });
   }
-  return { id: s.user.id, email: s.user.email, isAdmin: authConfig().adminEmails.includes(s.user.email), sessionId: s.id };
+  const isAdmin = authConfig().adminEmails.includes(s.user.email);
+  const step = adminStepUp().mode;
+  const elevated = isAdmin && (step === "exempt" || (step === "code" && !!s.elevatedUntil && s.elevatedUntil.getTime() > now));
+  return { id: s.user.id, email: s.user.email, isAdmin, elevated, canManageContent: isAdmin && elevated, sessionId: s.id };
 });
 
 /** For pages and non-autosave server actions: redirects to the login page when there is no valid session. */
@@ -70,15 +103,29 @@ export async function requireUser(): Promise<CurrentUser> {
 }
 
 export class ForbiddenError extends Error {
-  constructor() {
-    super("Only administrators can change the shared question bank.");
+  constructor(message = "Only administrators can change shared certification content.") {
+    super(message);
   }
 }
 
+/** Shared-content changes: allowlisted email and a session confirmed with the administrator access code. */
 export async function requireAdmin(): Promise<CurrentUser> {
   const user = await requireUser();
   if (!user.isAdmin) throw new ForbiddenError();
+  if (!user.canManageContent) {
+    throw new ForbiddenError(
+      adminStepUp().mode === "disabled"
+        ? "Administration is disabled until ADMIN_ACCESS_CODE is configured on the server."
+        : "Confirm your administrator access code first (Settings → Administrator access).",
+    );
+  }
   return user;
+}
+
+export async function elevateSession(sessionId: string): Promise<Date> {
+  const until = new Date(Date.now() + adminStepUp().hours * 3_600_000);
+  await prisma.authSession.update({ where: { id: sessionId }, data: { elevatedUntil: until } });
+  return until;
 }
 
 export async function endSession(): Promise<void> {
