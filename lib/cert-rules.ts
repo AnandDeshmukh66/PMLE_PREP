@@ -58,6 +58,24 @@ export function sourceShort(id: string, name: string): string {
   return (words.length > 1 ? words.map((w) => w[0]).join("") : name.slice(0, 4)).slice(0, 4).toUpperCase();
 }
 
+export type NeutralLabel = { index: number; label: string; short: string };
+
+/**
+ * Learner-facing labels that reveal nothing about a source: "Source" ("S") when the version has one source, otherwise
+ * "Source 1…N" ("S1…SN"). `ids` must be in the version's display order (kind, then id), which is fixed for a
+ * published version, so labels and backup aliases stay stable.
+ */
+export function neutralSourceLabels(ids: string[]): Map<string, NeutralLabel> {
+  const single = ids.length === 1;
+  return new Map(ids.map((id, i) => [id, { index: i + 1, label: single ? "Source" : `Source ${i + 1}`, short: single ? "S" : `S${i + 1}` }]));
+}
+
+/** Neutral backup reference for an occurrence key ("pdf:84" -> "#1:84"). "#" never occurs in a real source id. */
+export function neutralSourceRef(index: number, sourceKey: string, sourceId: string): string {
+  const part = sourceKey.startsWith(`${sourceId}:`) ? sourceKey.slice(sourceId.length + 1) : sourceKey.slice(sourceKey.indexOf(":") + 1);
+  return `#${index}:${part}`;
+}
+
 export function sourceKindLabel(kind: string): string {
   return kind === "pdf" ? "PDF" : kind === "website" ? "Website" : kind === "json" ? "Import" : kind;
 }

@@ -8,11 +8,11 @@ import { prisma } from "@/lib/db";
 import { daysBetween } from "@/lib/plan";
 import { getSettings } from "@/lib/settings";
 
-async function sidebarData(userId: string, versionId: string) {
-  const [all, flags, issues, settings, latest, sources, members] = await Promise.all([
+async function sidebarData(userId: string, versionId: string, admin: boolean) {
+  const [all, flags, issues, settings, latest, sources] = await Promise.all([
     prisma.canonicalQuestion.count({ where: { versionId, active: true } }),
     prisma.questionFlag.groupBy({ by: ["kind"], where: { userId, active: true, question: { versionId, active: true } }, _count: true }),
-    prisma.importIssue.count({ where: { versionId, active: true, status: "open", severity: { in: ["warning", "error"] } } }),
+    admin ? prisma.importIssue.count({ where: { versionId, active: true, status: "open", severity: { in: ["warning", "error"] } } }) : 0,
     getSettings(userId),
     prisma.questionAttempt.findMany({
       where: { userId, isCorrect: { not: null }, question: { versionId, active: true } },
@@ -20,20 +20,12 @@ async function sidebarData(userId: string, versionId: string) {
       distinct: ["questionId"],
       select: { isCorrect: true },
     }),
-    prisma.questionSource.findMany({ where: { versionId }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] }),
-    prisma.sourceOccurrence.findMany({ where: { versionId, excluded: false, canonical: { active: true } }, select: { canonicalId: true, sourceId: true }, distinct: ["canonicalId", "sourceId"] }),
+    admin ? prisma.questionSource.findMany({ where: { versionId }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] }) : [],
   ]);
   const f = Object.fromEntries(flags.map((x) => [x.kind, x._count]));
-  const perSource = new Map<string, number>();
-  const perQuestion = new Map<number, number>();
-  for (const m of members) {
-    perSource.set(m.sourceId, (perSource.get(m.sourceId) ?? 0) + 1);
-    perQuestion.set(m.canonicalId!, (perQuestion.get(m.canonicalId!) ?? 0) + 1);
-  }
   return {
     counts: {
       all,
-      common: [...perQuestion.values()].filter((n) => n >= 2).length,
       marked: f.review ?? 0,
       flagged: f.flag ?? 0,
       bookmarked: f.bookmark ?? 0,
@@ -41,22 +33,23 @@ async function sidebarData(userId: string, versionId: string) {
       issues,
       daysLeft: settings.examDate ? daysBetween(localDate(new Date()), settings.examDate) : null,
     },
-    sources: sources.map((s) => ({ ...s, count: perSource.get(s.id) ?? 0 })),
+    sources,
   };
 }
 
 export default async function CertLayout({ children, params }: Readonly<{ children: React.ReactNode; params: Promise<{ cert: string }> }>) {
   const { user, cert, base, version } = await certAdminPage(params);
-  const [data, domains] = await Promise.all([version ? sidebarData(user.id, version.id) : null, versionDomains(version?.id ?? null)]);
+  const [data, domains] = await Promise.all([version ? sidebarData(user.id, version.id, user.isAdmin) : null, versionDomains(version?.id ?? null)]);
+  // Source identities are administrative provenance; learner page data carries none.
+  const sources = user.isAdmin ? (data?.sources ?? []).map((s) => ({ id: s.id, name: s.name, kind: s.kind, short: sourceShort(s.id, s.name) })) : [];
   return (
-    <CertProvider cert={{ slug: cert.slug, base, code: cert.code, name: cert.name, versionId: version?.id ?? null, versionLabel: version?.label ?? null, domains, sources: (data?.sources ?? []).map((s) => ({ id: s.id, name: s.name, kind: s.kind, short: sourceShort(s.id, s.name) })) }}>
+    <CertProvider cert={{ slug: cert.slug, base, code: cert.code, name: cert.name, versionId: version?.id ?? null, versionLabel: version?.label ?? null, domains, sources }}>
       <AppShell
         sidebar={
           <Sidebar
             email={user.email}
             cert={{ slug: cert.slug, code: cert.code, name: cert.name, versionLabel: version?.label ?? null, published: !!version }}
-            counts={data?.counts ?? { all: 0, common: 0, marked: 0, flagged: 0, bookmarked: 0, incorrect: 0, issues: 0, daysLeft: null }}
-            sources={data?.sources ?? []}
+            counts={data?.counts ?? { all: 0, marked: 0, flagged: 0, bookmarked: 0, incorrect: 0, issues: 0, daysLeft: null }}
             showData={user.isAdmin}
           />
         }

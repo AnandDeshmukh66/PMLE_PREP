@@ -1,7 +1,7 @@
 # Questions & Review consolidation, and Exam Coverage & Quality
 
-- Status: Proposed (awaiting approval; nothing implemented)
-- Owner / last updated: planning agent, 2026-11-21 (revision 2: complete learner source abstraction, Blueprint Distribution Alignment definition, mandatory production weight verification)
+- Status: Completed in code, 2026-11-21. Release steps remain: set `BLUEPRINT_VERIFIED_WEIGHTS` in production (section 8.6, step 6) and the post-deploy check R6.
+- Owner / last updated: implementation agent, 2026-11-21 (revision 2 approved: complete learner source abstraction, Blueprint Distribution Alignment definition, mandatory production weight verification)
 - File name: requested explicitly as `exam-guide-mapping.md`. The folder convention (`NNNN-short-kebab-title.md`, see [README.md](README.md)) would make it `0001-questions-review-and-coverage.md`; rename on approval if preferred.
 
 ## 1. Executive summary
@@ -535,15 +535,15 @@ Each phase is independently deployable and testable. Order: 0 → 1 → 2 → 3 
 
 | Phase | Scope | Status | Notes |
 |---|---|---|---|
-| 0 | Pure helpers and unit tests | Not started | No UI change |
-| 1 | Questions & Review navigation and URL compatibility | Not started | Feature 1 |
-| 2 | Complete learner source abstraction (UI, page data, APIs, exhibits, backup) | Not started | Feature 1, D2, D11, D14 |
-| 3 | Admin-only quality page and navigation | Not started | Feature 2, security boundary |
-| 4A | Exam Coverage & Quality Overview without the score | Not started | Feature 2 |
-| 4B | Mandatory official weight verification (read-only) | Not started | Release gate for 4C, D16 |
-| 4C | Blueprint Distribution Alignment card behind the verification gate | Not started | Blocked until 4B passes, D13, D15 |
-| 5 | Simplified learner Exam Blueprint | Not started | Feature 2, D1 |
-| 6 | Documentation | Not started | After verification |
+| 0 | Pure helpers and unit tests | Done | No UI change |
+| 1 | Questions & Review navigation and URL compatibility | Done | Feature 1 |
+| 2 | Complete learner source abstraction (UI, page data, APIs, exhibits, backup) | Done | Feature 1, D2, D11, D14 |
+| 3 | Admin-only quality page and navigation | Done | Feature 2, security boundary |
+| 4A | Exam Coverage & Quality Overview without the score | Done | Feature 2 |
+| 4B | Mandatory official weight verification (read-only) | Done: **pass** | Release gate for 4C, D16; section 14 |
+| 4C | Blueprint Distribution Alignment card behind the verification gate | Done in code | D13, D15. Production shows the score once the environment variable is set |
+| 5 | Simplified learner Exam Blueprint | Done | Feature 2, D1 |
+| 6 | Documentation | Done | After verification |
 
 ### Phase 0: Pure helpers
 
@@ -796,7 +796,20 @@ Run as in CURRENT_STATE section 16: `tsc --noEmit`, `eslint .`, `next build`, Vi
 Entries are added by Phase 4B. Format: date · verifier · guide SHA-256 (stored / live) · official values · production version id and values · result (pass / mismatch / blocked) · notes.
 
 - 2026-11-21 · planning agent · stored guide only (live not fetched) · 13/16/21/20/18/13 (from `guide.txt`) · **local SQLite only**, `ver_pmle_2026` 13/16/21/20/18/13 · not a production verification; does **not** satisfy R1.
+- 2026-11-21 · implementation agent, `scripts/verify-exam-weights.ts --live --cert pmle` · stored `8353ed16bc4fcaebd6dab301f61bf2f86a3eaf341a199a1d6f38196745e4a598` / live (`GUIDE_URL`) `8353ed16bc4fcaebd6dab301f61bf2f86a3eaf341a199a1d6f38196745e4a598`, identical · official values from `pdf_extract.py` + `parseGuideWeights`: 6 sections, 13/16/21/20/18/13, Σ 101; the same six values are in the tracked `guide.txt` · **production** Neon (`production` branch), published `ver_pmle_2026`: 13/16/21/20/18/13, Σ 101, all six titles equal · **result: pass** · read through a session with `default_transaction_read_only=on` (confirmed with `SHOW`) using only `findUnique`/`findMany`; no record was written. Satisfies R1 once `BLUEPRINT_VERIFIED_WEIGHTS=ver_pmle_2026=<the six values above>` is set in production (not done by the agent: production configuration is a manual step). A human reading of the six values from the PDF (section 8.6, step 2) is still recommended at that time.
+- 2026-11-21 (second run, 18:20 IST) · implementation agent, `scripts/verify-exam-weights.ts --live --cert pmle` · stored and live guide SHA-256 identical (`8353ed16…a598`) · guide text read directly: Section 1 to 6 = ~13%, ~16%, ~21%, ~20%, ~18%, ~13% (Σ 101) · **production** Neon, published `ver_pmle_2026`: 13/16/21/20/18/13, Σ 101, all six titles equal · **result: pass** · session confirmed read-only (`SHOW default_transaction_read_only` = `on`) before the run; only `findUnique`/`findMany`. Action taken: `BLUEPRINT_VERIFIED_WEIGHTS="ver_pmle_2026=13,16,21,20,18,13"` added to the local `.env`. The earlier "unavailable" message was this variable being unset (state `unverified`), not a failed check. **Still to do by hand:** the same variable in the production host's configuration.
+- 2026-11-21 · read-only checks U3/U4 on production (counts only): 24 practice/mock sessions, none with a source-named title or a source scope, filter or sort in its config; 8 questions with exhibits (9 images), all with a local copy present in `public/question-assets/`.
 
 ## Deviations
 
+- 2026-11-21 (implementation):
+  - Phases shipped together in one change set, executed in order 0 → 6 with tests after each phase; the plan allowed independent releases.
+  - Source search, filters and sorts are also neutralised inside `filterRows` (`learnerFilters` applied there), as defence in depth in addition to the page-level filtering.
+  - The `common` practice mode stays in `PRACTICE_MODES` so saved configs still validate, but it is hidden from learners and coerced to `all` on the server for them (`LEARNER_HIDDEN_MODES`).
+  - The mock exam page now orders occurrences like the question page and the exhibit route (non-excluded, `sourceId` desc, `sourceQnum` asc), so all three pick the same primary occurrence for exhibits.
+  - Claim labels in the client bundle are neutral for every kind ("Source answer key", "Original key"); administrators see the real source name in brackets. The search placeholder uses the source's short name, so no source name is compiled into client code.
+  - The learner sidebar no longer receives the open-issue count (administrative metadata).
+  - The score card was extracted to `components/distribution-card.tsx` so its three gate states are tested by rendering (unit), since one e2e server can carry only one environment value. The e2e server is configured as verified, with the entry derived from the tracked guide text; the draft fixture covers "not yet verified".
+  - "Source details →" on the Sources table links to Data Settings, as specified; extraction reports and the inventory identity line (real names) moved to Import runs.
+  - Restoring a backup into a different account in the same database re-adds sessions on a second import (session ids belong to the original account). This is pre-existing behaviour, unchanged; attempts, flags and notes stay idempotent, and a restore into a fresh database is fully idempotent.
 - 2026-11-21 (revision 2): added complete learner abstraction for exhibits and backups (D11, D14), renamed the metric to Blueprint Distribution Alignment (D15), and split Phase 4 into 4A/4B/4C with a mandatory production verification gate (D16, D13). The phase order changed accordingly; no earlier decision was reversed.

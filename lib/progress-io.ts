@@ -1,16 +1,39 @@
 import { createId } from "./id";
 import type { PrismaClient } from "@prisma/client";
 import { z } from "zod";
-import { LEGACY_PMLE_VERSION_ID, VISIBLE_STATUSES } from "./cert-rules";
+import { LEGACY_PMLE_VERSION_ID, neutralSourceLabels, neutralSourceRef, VISIBLE_STATUSES } from "./cert-rules";
+import { displaySessionTitle, neutralSessionConfig } from "./filters";
 import { parseJson } from "./json";
 import { SETTINGS_SCHEMA } from "./settings";
 
 export const PROGRESS_FORMAT = "pmle-prep-progress";
-/** v3: every item names its content version (v2 files predate versions and always mean PMLE 2026). */
-export const PROGRESS_VERSION = 3;
+/**
+ * v3: every item names its content version (v2 files predate versions and always mean PMLE 2026).
+ * v4: questions are referenced by neutral source aliases ("#1:84") instead of raw source keys ("pdf:84"), and
+ * session titles/configs carry no source names, so a backup reveals nothing about the original sources.
+ */
+export const PROGRESS_VERSION = 4;
 export const MAX_BACKUP_BYTES = 25 * 1024 * 1024;
 
-type QRef = { versionId: string; code: string; sourceKeys: string[] };
+type QRef = { versionId: string; code: string; sourceRefs: string[] };
+
+/** Sources of the visible versions in display order (kind, then id), exactly as versionSources() orders them for learner labels. */
+const visibleSources = (db: PrismaClient) =>
+  db.questionSource.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { versionId: true, id: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] });
+
+/** `${versionId}|${sourceId}` -> neutral index ("Source N"), per version. `sources` must already be in display order. */
+function sourceIndexes(sources: { versionId: string; id: string }[]): Map<string, number> {
+  const byVersion = new Map<string, string[]>();
+  for (const s of sources) (byVersion.get(s.versionId) ?? byVersion.set(s.versionId, []).get(s.versionId)!).push(s.id);
+  const out = new Map<string, number>();
+  for (const [vid, ids] of byVersion) for (const [id, l] of neutralSourceLabels(ids)) out.set(`${vid}|${id}`, l.index);
+  return out;
+}
+
+function aliasOf(index: Map<string, number>, o: { versionId: string; sourceId: string; sourceKey: string }): string | null {
+  const n = index.get(`${o.versionId}|${o.sourceId}`);
+  return n ? neutralSourceRef(n, o.sourceKey, o.sourceId) : null;
+}
 export type VersionRef = { id: string; certification: string; label: string };
 
 export type ProgressExport = {
@@ -48,14 +71,15 @@ export type ProgressExport = {
 
 /**
  * Complete export of one user's data across all certifications and versions. Questions are referenced by
- * version + source keys (e.g. "pdf:84"), which survive bank rebuilds and deployments.
+ * version + code + neutral source aliases ("#1:84"), which survive bank rebuilds and deployments of the same version.
  */
 export async function exportProgress(db: PrismaClient, userId: string): Promise<ProgressExport> {
-  const [user, versions, qs, occ, attempts, flags, notes, theory, tasks, settings, sessions] = await Promise.all([
+  const [user, versions, qs, occ, sources, attempts, flags, notes, theory, tasks, settings, sessions] = await Promise.all([
     db.user.findUniqueOrThrow({ where: { id: userId } }),
     db.contentVersion.findMany({ where: { status: { in: [...VISIBLE_STATUSES] } }, select: { id: true, label: true, certification: { select: { slug: true } } } }),
     db.canonicalQuestion.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { id: true, code: true, versionId: true } }),
-    db.sourceOccurrence.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { sourceKey: true, canonicalId: true } }),
+    db.sourceOccurrence.findMany({ where: { version: { status: { in: [...VISIBLE_STATUSES] } } }, select: { versionId: true, sourceId: true, sourceKey: true, canonicalId: true } }),
+    visibleSources(db),
     db.questionAttempt.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
     db.questionFlag.findMany({ where: { userId, active: true } }),
     db.questionNote.findMany({ where: { userId }, orderBy: { createdAt: "asc" } }),
@@ -65,9 +89,13 @@ export async function exportProgress(db: PrismaClient, userId: string): Promise<
     db.practiceSession.findMany({ where: { userId }, orderBy: { startedAt: "asc" }, include: { questions: { orderBy: { order: "asc" } } } }),
   ]);
   const qById = new Map(qs.map((q) => [q.id, q]));
-  const keys = new Map<number, string[]>();
-  for (const o of occ) if (o.canonicalId) (keys.get(o.canonicalId) ?? keys.set(o.canonicalId, []).get(o.canonicalId)!).push(o.sourceKey);
-  const ref = (id: number): QRef => ({ versionId: qById.get(id)?.versionId ?? "", code: qById.get(id)?.code ?? "", sourceKeys: (keys.get(id) ?? []).sort() });
+  const index = sourceIndexes(sources);
+  const aliases = new Map<number, string[]>();
+  for (const o of occ) {
+    const alias = o.canonicalId ? aliasOf(index, o) : null;
+    if (alias) (aliases.get(o.canonicalId!) ?? aliases.set(o.canonicalId!, []).get(o.canonicalId!)!).push(alias);
+  }
+  const ref = (id: number): QRef => ({ versionId: qById.get(id)?.versionId ?? "", code: qById.get(id)?.code ?? "", sourceRefs: (aliases.get(id) ?? []).sort().slice(0, 10) });
   const iso = (d: Date | null) => (d ? d.toISOString() : null);
   return {
     format: PROGRESS_FORMAT,
@@ -101,8 +129,8 @@ export async function exportProgress(db: PrismaClient, userId: string): Promise<
       versionId: s.versionId,
       kind: s.kind,
       mode: s.mode,
-      title: s.title,
-      config: parseJson(s.config, {}),
+      title: displaySessionTitle(s.title, s.config, false),
+      config: neutralSessionConfig(parseJson(s.config, {})),
       allocation: parseJson(s.allocation, null),
       status: s.status,
       immediateFeedback: s.immediateFeedback,
@@ -134,7 +162,8 @@ const Str = (max: number) => z.string().max(max);
 const IsoDate = z.string().max(40).refine((s) => !Number.isNaN(Date.parse(s)), "invalid date");
 const LabelList = z.array(z.string().regex(/^[A-H]$/)).max(8);
 const VersionField = Str(40).optional();
-const Ref = { versionId: VersionField, code: Str(20).default(""), sourceKeys: z.array(Str(120)).max(10).default([]) };
+/** v1–v3 files carry raw `sourceKeys`, v4 files neutral `sourceRefs`; either may be missing. */
+const Ref = { versionId: VersionField, code: Str(20).default(""), sourceKeys: z.array(Str(120)).max(10).default([]), sourceRefs: z.array(Str(130)).max(10).default([]) };
 const ClientKey = z.string().min(8).max(64).regex(/^[\w-]+$/).nullable().optional();
 
 const BackupSchema = z.object({
@@ -270,11 +299,12 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
   };
 
   const visible = { version: { status: { in: [...VISIBLE_STATUSES] } } };
-  const [versions, occ, qs, concepts] = await Promise.all([
+  const [versions, occ, qs, concepts, sources] = await Promise.all([
     db.contentVersion.findMany({ where: { status: { in: [...VISIBLE_STATUSES] } }, select: { id: true, label: true, certification: { select: { slug: true } } } }),
-    db.sourceOccurrence.findMany({ where: visible, select: { versionId: true, sourceKey: true, canonicalId: true } }),
+    db.sourceOccurrence.findMany({ where: visible, select: { versionId: true, sourceId: true, sourceKey: true, canonicalId: true } }),
     db.canonicalQuestion.findMany({ where: visible, select: { id: true, versionId: true, code: true, active: true, mergedIntoId: true } }),
     db.theoryConcept.findMany({ where: visible, select: { versionId: true, id: true } }),
+    visibleSources(db),
   ]);
   // A backup's version id is used when it exists here; otherwise the same certification + label (another deployment).
   const localIds = new Set(versions.map((v) => v.id));
@@ -287,13 +317,24 @@ export async function importProgress(db: PrismaClient, userId: string, data: unk
     return label ? (localByLabel.get(label) ?? null) : null;
   };
   const byKey = new Map(occ.filter((o) => o.canonicalId).map((o) => [`${o.versionId}|${o.sourceKey}`, o.canonicalId!]));
+  const index = sourceIndexes(sources);
+  const byAlias = new Map<string, number>();
+  for (const o of occ) {
+    const alias = o.canonicalId ? aliasOf(index, o) : null;
+    if (alias) byAlias.set(`${o.versionId}|${alias}`, o.canonicalId!);
+  }
   const byCode = new Map(qs.map((q) => [`${q.versionId}|${q.code}`, q]));
   const versionOfQuestion = new Map(qs.map((q) => [q.id, q.versionId]));
-  const resolve = (r: { versionId?: string; code: string; sourceKeys: string[] }): number | null => {
+  // Raw source keys (v1–v3), then neutral aliases (v4), then the question code within the version.
+  const resolve = (r: { versionId?: string; code: string; sourceKeys: string[]; sourceRefs: string[] }): number | null => {
     const vid = versionOf(r.versionId);
     if (!vid) return null;
     for (const k of r.sourceKeys) {
       const id = byKey.get(`${vid}|${k}`);
+      if (id) return id;
+    }
+    for (const a of r.sourceRefs) {
+      const id = byAlias.get(`${vid}|${a}`);
       if (id) return id;
     }
     const q = byCode.get(`${vid}|${r.code}`);

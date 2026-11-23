@@ -5,7 +5,7 @@ import { QuestionCard } from "@/components/question-card";
 import { QuestionSide } from "@/components/question-side";
 import { JumpTo } from "@/components/jump-to";
 import { buttonClass, PageHeader } from "@/components/ui";
-import { filtersToParams, parseFilters, scopeFromParam, scopeMeta } from "@/lib/filters";
+import { filtersToParams, learnerFilters, parseFilters, scopeFromParam, scopeMeta } from "@/lib/filters";
 import { toCardData } from "@/lib/question-data";
 import { filterRows, loadQuestionDetail, loadQuestionRows, versionSources } from "@/lib/questions";
 import { getSettings } from "@/lib/settings";
@@ -23,10 +23,10 @@ export default async function QuestionPage({ params, searchParams }: { params: P
   if (!detail) notFound();
   const settings = await getSettings(user.id);
   const scope = scopeFromParam(typeof sp.from === "string" ? sp.from : undefined);
-  const filters = parseFilters(sp);
+  const filters = learnerFilters(parseFilters(sp), user.isAdmin);
   const [rows, sources] = await Promise.all([loadQuestionRows(user.id, version.id), versionSources(version.id)]);
-  const list = filterRows(rows, scope, filters);
-  const meta = scopeMeta(scope, sources);
+  const list = filterRows(rows, scope, filters, { sourceSearch: user.isAdmin });
+  const meta = scopeMeta(scope);
   const idx = list.findIndex((r) => r.code === detail.q.code);
   const qp = filtersToParams(filters);
   qp.set("from", scope);
@@ -34,12 +34,12 @@ export default async function QuestionPage({ params, searchParams }: { params: P
   const prev = idx > 0 ? list[idx - 1].code : null;
   const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1].code : null;
   const back = `${L(meta.path)}${filtersToParams(filters).toString() ? `?${filtersToParams(filters).toString()}` : ""}#${detail.q.code}`;
-  const data = toCardData(detail, settings.gradeContested);
+  const data = toCardData(detail, settings.gradeContested, { admin: user.isAdmin, sources });
 
   return (
     <div className="animate-in">
       <PageHeader
-        crumbs={[{ label: "Question bank", href: L("/questions") }, { label: meta.title, href: back }, { label: detail.q.code }]}
+        crumbs={[{ label: "Questions & Review", href: L("/questions") }, { label: meta.title, href: back }, { label: detail.q.code }]}
         title={
           <span className="flex items-center gap-3">
             <Link href={back} className="rounded-lg p-1 text-muted hover:bg-white/5 hover:text-fg" aria-label="Back to list" data-testid="back-to-list">

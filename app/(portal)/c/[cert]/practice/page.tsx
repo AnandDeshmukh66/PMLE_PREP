@@ -4,7 +4,8 @@ import { PracticeConfigForm } from "@/components/practice-config";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, ProgressBar, buttonClass } from "@/components/ui";
 import { prisma } from "@/lib/db";
 import { loadQuestionRows } from "@/lib/questions";
-import { PRACTICE_MODES, type PracticeMode } from "@/lib/selection";
+import { displaySessionTitle } from "@/lib/filters";
+import { LEARNER_HIDDEN_MODES, PRACTICE_MODES, type PracticeMode } from "@/lib/selection";
 import { getSettings } from "@/lib/settings";
 import { relTime } from "@/lib/utils";
 import { certPage } from "@/lib/cert";
@@ -29,9 +30,10 @@ export default async function PracticePage({ params, searchParams }: { params: P
       include: { questions: { select: { answeredAt: true, isCorrect: true } } },
     }),
   ]);
+  const admin = user.isAdmin;
   const counts: Record<PracticeMode, number> = {
     all: rows.length,
-    common: rows.filter((r) => r.isCommon).length,
+    common: admin ? rows.filter((r) => r.isCommon).length : 0,
     domain: rows.filter((r) => r.domainNumber !== null).length,
     topic: rows.filter((r) => r.conceptIds.length).length,
     incorrect: rows.filter((r) => r.stats.latestCorrect === false).length,
@@ -43,8 +45,9 @@ export default async function PracticePage({ params, searchParams }: { params: P
   };
   const str = (k: string) => (typeof sp[k] === "string" ? (sp[k] as string) : undefined);
   const modeParam = str("mode");
+  const modes = (Object.keys(PRACTICE_MODES) as PracticeMode[]).filter((m) => admin || !LEARNER_HIDDEN_MODES.includes(m));
   const initial = {
-    mode: (modeParam && modeParam in PRACTICE_MODES ? modeParam : "all") as PracticeMode,
+    mode: (modeParam && (modes as string[]).includes(modeParam) ? modeParam : "all") as PracticeMode,
     count: Number(str("count")) || settings.questionsPerSession,
     domains: (str("domain") ?? "").split(",").map(Number).filter((n) => n >= 1 && n <= 6),
     concepts: (str("concept") ?? "").split(",").filter(Boolean),
@@ -66,7 +69,7 @@ export default async function PracticePage({ params, searchParams }: { params: P
               return (
                 <div key={s.id} className="flex items-center gap-4 px-5 py-3">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-fg">{s.title}</div>
+                    <div className="truncate text-sm text-fg">{displaySessionTitle(s.title, s.config, admin)}</div>
                     <div className="text-xs text-muted">
                       {done} of {s.questions.length} answered · started {relTime(s.startedAt)}
                     </div>
@@ -83,6 +86,7 @@ export default async function PracticePage({ params, searchParams }: { params: P
       )}
       <PracticeConfigForm
         initial={initial}
+        modes={modes}
         counts={counts}
         domains={domains.map((d) => ({ number: d.number, title: d.title, count: rows.filter((r) => r.domainNumber === d.number).length }))}
         concepts={concepts.map((c) => ({ id: c.id, name: c.name, domain: c.domainNumber, count: c._count.questions }))}
@@ -99,7 +103,7 @@ export default async function PracticePage({ params, searchParams }: { params: P
               return (
                 <Link key={s.id} href={L(`/practice/${s.id}`)} className="flex items-center gap-4 px-5 py-3 hover:bg-white/[0.02]">
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm text-fg-2">{s.title}</div>
+                    <div className="truncate text-sm text-fg-2">{displaySessionTitle(s.title, s.config, admin)}</div>
                     <div className="text-xs text-faint">{relTime(s.submittedAt ?? s.updatedAt)}</div>
                   </div>
                   <Badge tone={s.status === "abandoned" ? "outline" : "neutral"}>{s.status === "abandoned" ? "abandoned" : `${correct}/${graded.length} correct`}</Badge>

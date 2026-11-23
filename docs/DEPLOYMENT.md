@@ -179,11 +179,12 @@ Test a restore into a scratch database at least once before you rely on it.
   - plan ticks
   - answer resolutions
 
-  Questions are referenced by content version and stable source keys, so a backup still works after the bank is reimported, and it covers every certification version the user has worked on.
+  Questions are referenced by content version, question code and neutral source references (`#<n>:<number>`, format version 4), so a backup still works after the bank is reimported and names no original source. It covers every certification version the user has worked on.
 - **Restore from a backup** (Settings) validates the file and *merges* it into the signed-in account only.
   - It never deletes anything, and importing the same file twice adds nothing.
   - It rejects files that aren't PMLE Prep exports.
-  - It accepts older version 1 and 2 exports, which are applied to the PMLE 2026 version.
+  - It accepts older version 1 and 2 exports, which are applied to the PMLE 2026 version, and version 3 exports (raw source keys), which restore exactly as before.
+  - Version 4 files are not accepted by deployments older than 2026-11-21; restore them on a current deployment.
 - These files are a convenience, not a substitute for database backups.
 
 ## 7. Security checklist
@@ -195,6 +196,8 @@ Test a restore into a scratch database at least once before you rely on it.
 - [ ] The database is not publicly reachable, or requires TLS and a strong password, and the app's database user has only the access it needs.
 - [ ] Provider backups and PITR are on, and a restore has been tested.
 - [ ] Uptime monitoring checks `/api/health`.
+- [ ] Before showing the Blueprint Distribution Alignment score for a content version: run `npx tsx scripts/verify-exam-weights.ts --live --cert <slug>` against the production database through a read-only path (it only reads), record the result in the plan's verification log, and only on PASS set `BLUEPRINT_VERIFIED_WEIGHTS` to the printed entry. On a mismatch, change nothing and investigate.
+- [ ] After each release, sign in as a learner and view the page source of a question page: no original source names, URLs or file names. As an administrator, confirm the provenance panel still shows them.
 
 ## 8. Local development
 

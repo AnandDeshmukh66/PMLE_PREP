@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 import { devOrigins } from "./lib/dev-origins";
 
 /** Single-certification URLs from before multi-certification support; they now belong to PMLE. */
-const LEGACY_SECTIONS = ["questions", "practice", "mock", "theory", "plan", "analytics", "blueprint", "common", "review", "flagged", "incorrect", "bookmarks", "data-quality"];
+const LEGACY_SECTIONS = ["questions", "practice", "mock", "theory", "plan", "analytics", "blueprint", "review", "flagged", "incorrect", "bookmarks", "data-quality"];
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["@prisma/client", "playwright", "playwright-core"],
@@ -19,8 +19,11 @@ const nextConfig: NextConfig = {
         { source: `/${s}`, destination: `/c/pmle/${s}`, permanent: false },
         { source: `/${s}/:path*`, destination: `/c/pmle/${s}/:path*`, permanent: false },
       ]),
-      { source: "/pdf", destination: "/c/pmle/sources/pdf", permanent: false },
-      { source: "/examprepper", destination: "/c/pmle/sources/examprepper", permanent: false },
+      // Former per-source and "Common" lists are part of All Questions.
+      ...["/common", "/common/:path*", "/pdf", "/examprepper"].map((source) => ({ source, destination: "/c/pmle/questions", permanent: false })),
+      { source: "/c/:cert/common", destination: "/c/:cert/questions", permanent: false },
+      { source: "/c/:cert/common/:path*", destination: "/c/:cert/questions", permanent: false },
+      { source: "/c/:cert/sources/:path*", destination: "/c/:cert/questions", permanent: false },
     ];
   },
 };

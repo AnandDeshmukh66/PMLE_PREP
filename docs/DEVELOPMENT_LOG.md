@@ -15,6 +15,21 @@ Append-only record of **meaningful completed work**. Newest entry first. Do not 
 
 ---
 
+## 2026-11-21: Questions & Review, learner source abstraction, Exam Coverage & Quality
+
+- **Feature / change:** Implemented [implementation-plans/exam-guide-mapping.md](implementation-plans/exam-guide-mapping.md) (revision 2), phases 0 to 6.
+- **What was completed:**
+  - One "Questions & Review" sidebar group (All, Marked for Review, Flagged, Incorrect, Bookmarks). The Common and per-source pages are removed and their URLs redirect to All Questions.
+  - Learners receive no original source identity anywhere: neutral "Source" / "Source 1…N" labels and claim kinds, no source URLs, pages, topic labels, notes or asset paths in page data; source filters, sorts and search ignored; `/api/pdf` admin-only; exhibits through the new `/api/exhibit`; question export without source columns; personal backup format v4 with neutral references (v1 to v3 still restore as before). Administrators keep full provenance.
+  - Data Quality became the administrator-only **Exam Coverage & Quality** page, with a new Overview: Blueprint Distribution Alignment (gated by `BLUEPRINT_VERIFIED_WEIGHTS`), weight vs. share, domain table, separate question-quality card, and neutral per-source table.
+  - Slim learner Exam Blueprint (official weights, objectives, considerations; no personal stats or score), sharing `components/blueprint-share.tsx` with the admin page.
+  - Read-only weight verifier `scripts/verify-exam-weights.ts`; production PMLE weights verified (pass) on 2026-11-21.
+- **Important files / areas:** `lib/blueprint.ts`, `lib/exhibits.ts`, `lib/question-data.ts`, `lib/filters.ts`, `lib/questions.ts`, `lib/progress-io.ts`, `lib/quality.ts`, `components/sidebar.tsx`, `components/question-card.tsx`, `components/blueprint-share.tsx`, `components/distribution-card.tsx`, `app/(portal)/c/[cert]/data-quality/page.tsx`, `app/(portal)/c/[cert]/blueprint/page.tsx`, `app/api/exhibit/route.ts`, `app/api/pdf/route.ts`, `app/api/export/questions/route.ts`, `next.config.ts`.
+- **Implementation notes:**
+  - No schema change and no migration. No production data was written; the production checks ran in a read-only session.
+  - Production configuration still to do: set `BLUEPRINT_VERIFIED_WEIGHTS` to the verified entry; until then the score reads "unavailable".
+  - Verified with tsc, eslint, next build, Vitest on SQLite (224 passed) and on PostgreSQL via PGlite (221 passed, 3 skipped), Playwright e2e (23 passed). Deviations are listed in the plan.
+
 ## 2026-11-20: Documentation baseline established
 
 - **Feature / change:** Created the `docs/` documentation set for the existing application.

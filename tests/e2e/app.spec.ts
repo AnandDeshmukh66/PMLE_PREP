@@ -6,6 +6,8 @@ const DOMAIN = "acme-corp.com";
 const C = "/c/pmle";
 const ADMIN = `admin@${DOMAIN}`;
 const ACCESS_CODE = "e2e-access-code-123";
+/** Original source identities that must never reach a learner (names, ids, keys, asset paths, hosts). */
+const LEAK = /ExamPrepper|examtopics|PDF question bank|question-assets\/examprepper|pdf:\d|"source":"pdf"|\/api\/pdf/i;
 let seq = 0;
 const newEmail = (name: string) => `${name}-${Date.now().toString(36)}-${++seq}@${DOMAIN}`;
 
@@ -48,35 +50,65 @@ test.describe("existing study features (signed in)", () => {
     await signIn(page, newEmail("student"));
   });
 
-  test("flagging in the PDF view is reflected in All, Common and Flagged views", async ({ page }) => {
-    const code = await firstCode(page, `${C}/common`);
-    await go(page, `${C}/sources/pdf#${code}`);
-    const flag = page.getByTestId(`row-flag-${code}`);
-    await expect(flag).toHaveAttribute("aria-pressed", "false");
-    await flag.click();
-    await expect(flag).toHaveAttribute("aria-pressed", "true");
-    await allSaved(page);
+  test("Questions & Review: flags, bookmarks and review marks from All Questions sync to their lists and persist", async ({ page }) => {
+    const code = await firstCode(page, `${C}/questions`);
+    for (const [kind, list, toggle] of [
+      ["flag", "/flagged", "toggle-flag"],
+      ["bookmark", "/bookmarks", "toggle-bookmark"],
+      ["review", "/review", "toggle-review"],
+    ] as const) {
+      await go(page, `${C}/questions#${code}`);
+      const btn = page.getByTestId(`row-${kind}-${code}`);
+      await expect(btn, kind).toHaveAttribute("aria-pressed", "false");
+      await btn.click();
+      await expect(btn, kind).toHaveAttribute("aria-pressed", "true");
+      await allSaved(page);
 
-    for (const view of [`${C}/questions`, `${C}/common`, `${C}/sources/examprepper`]) {
-      await go(page, view);
-      await expect(page.getByTestId(`row-flag-${code}`), view).toHaveAttribute("aria-pressed", "true");
+      await go(page, `${C}${list}`);
+      await expect(page.getByTestId(`open-${code}`), list).toBeVisible();
+      await page.reload();
+      await expect(page.getByTestId(`open-${code}`), `${list} after reload`).toBeVisible();
+
+      await go(page, `${C}/questions/${code}`);
+      await expect(page.getByTestId(toggle), toggle).toHaveAttribute("aria-pressed", "true");
+      await page.getByTestId(toggle).click();
+      await expect(page.getByTestId(toggle), toggle).toHaveAttribute("aria-pressed", "false");
+      await allSaved(page);
+      await go(page, `${C}${list}`);
+      await expect(page.getByTestId(`open-${code}`), list).toHaveCount(0);
     }
-    await go(page, `${C}/flagged`);
-    await expect(page.getByTestId(`open-${code}`)).toBeVisible();
-
-    await go(page, `${C}/questions/${code}`);
-    await expect(page.getByTestId("toggle-flag")).toHaveAttribute("aria-pressed", "true");
-    await page.getByTestId("toggle-flag").click();
-    await expect(page.getByTestId("toggle-flag")).toHaveAttribute("aria-pressed", "false");
-    await allSaved(page);
-    await go(page, `${C}/flagged`);
-    await expect(page.getByTestId(`open-${code}`)).toHaveCount(0);
   });
 
-  test("answering in the PDF view updates All questions; notes autosave and persist", async ({ page }) => {
-    const code = await firstCode(page, `${C}/common`);
+  test("Questions & Review navigation: five lists, no source views, old URLs land on All Questions", async ({ page }) => {
+    await go(page, C);
+    const group = page.locator("aside nav > div").filter({ hasText: "Questions & Review" });
+    await expect(group.locator("li")).toHaveText(["All Questions339", "Marked for Review", "Flagged Questions", "Incorrect Questions", "Bookmarks"].map((t) => new RegExp(`^${t}`)));
+    const nav = page.locator("aside nav");
+    for (const gone of ["Common Questions", "PDF question bank", "ExamPrepper", "Question bank"]) await expect(nav, gone).not.toContainText(gone);
+    for (const [from, to] of [
+      [`${C}/common`, `${C}/questions`],
+      [`${C}/sources/pdf`, `${C}/questions`],
+      [`${C}/sources/examprepper?domain=2`, `${C}/questions?domain=2`],
+      ["/pdf", `${C}/questions`],
+      ["/examprepper", `${C}/questions`],
+      ["/common", `${C}/questions`],
+    ]) {
+      const res = await go(page, from);
+      expect(res?.status(), from).toBe(200);
+      expect(new URL(page.url()).pathname + new URL(page.url()).search, from).toBe(to);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await go(page, `${C}/questions`);
+    await page.getByRole("button", { name: "Open navigation" }).click();
+    const mobile = page.getByRole("dialog");
+    await expect(mobile).toContainText("Questions & Review");
+    await expect(mobile).not.toContainText("Common Questions");
+  });
+
+  test("answering from an old source list link updates All questions; notes autosave and persist", async ({ page }) => {
+    const code = await firstCode(page, `${C}/questions`);
     await go(page, `${C}/questions/${code}?from=pdf`);
-    await expect(page.getByTestId("list-position")).toContainText("PDF");
+    await expect(page.getByTestId("list-position")).toContainText("All Questions");
     await expect(page.getByTestId("feedback")).toHaveCount(0);
     await page.getByTestId("option-A").click();
     await page.getByTestId("submit-answer").click();
@@ -145,7 +177,7 @@ test.describe("existing study features (signed in)", () => {
   });
 
   test("every main page renders", async ({ page }) => {
-    const pages = ["", "/questions", "/sources/pdf", "/sources/examprepper", "/common", "/review", "/flagged", "/incorrect", "/bookmarks", "/practice", "/mock", "/theory", "/blueprint", "/analytics", "/plan", "/history", "/data-quality", "/data-quality?tab=duplicates"].map((p) => C + p);
+    const pages = ["", "/questions", "/review", "/flagged", "/incorrect", "/bookmarks", "/practice", "/mock", "/theory", "/blueprint", "/analytics", "/plan", "/history"].map((p) => C + p);
     for (const p of ["/", ...pages, "/settings"]) {
       const res = await go(page, p);
       expect(res?.status(), p).toBe(200);
@@ -153,8 +185,14 @@ test.describe("existing study features (signed in)", () => {
     }
     await go(page, C);
     await expect(page.getByTestId("inventory-identity")).toContainText("339");
-    await go(page, `${C}/data-quality?tab=duplicates`);
-    await expect(page.getByTestId("dq-readonly")).toBeVisible();
+    // Exam Coverage & Quality is administrative: learners get 404 and no navigation entry.
+    for (const p of [`${C}/data-quality`, `${C}/data-quality?tab=duplicates`, `${C}/data-quality?tab=imports`]) {
+      const res = await page.goto(p);
+      expect(res?.status(), p).toBe(404);
+    }
+    await go(page, C);
+    await expect(page.locator("aside nav")).not.toContainText("Exam Coverage");
+    await expect(page.locator("aside nav")).not.toContainText("Data Quality");
   });
 });
 
@@ -372,6 +410,154 @@ test.describe("responsiveness and failure handling", () => {
   });
 });
 
+test.describe("source abstraction", () => {
+  /** A question with a locally stored exhibit, and the question that is PDF question 84. */
+  const EXHIBIT = "Q-0147";
+  const PDF84 = "Q-0084";
+  const html = async (page: Page, path: string) => {
+    expect((await go(page, path))?.status(), path).toBe(200);
+    return page.content();
+  };
+  const codes = async (page: Page, path: string) => {
+    await go(page, path);
+    return page.getByTestId("question-row").locator("a[data-testid^='open-']").evaluateAll((as) => as.map((a) => a.getAttribute("data-testid")));
+  };
+
+  test("learners never receive source names, ids, keys, asset paths or source links in pages, files or APIs", async ({ page, request }) => {
+    await signIn(page, newEmail("leak"));
+    for (const p of [C, `${C}/questions`, `${C}/questions/${EXHIBIT}`, `${C}/questions/${PDF84}`, `${C}/practice`, `${C}/mock`, "/settings"]) expect(await html(page, p), p).not.toMatch(LEAK);
+
+    await go(page, `${C}/questions/${EXHIBIT}`);
+    const img = page.getByTestId("question-card").locator("img").first();
+    await expect(img).toHaveAttribute("src", /^\/api\/exhibit\?q=\d+&i=0$/);
+    expect(await img.evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0)).toBe(true);
+    await page.getByTestId("metadata-panel").locator("summary").click();
+    await expect(page.getByTestId("question-sources")).toContainText(/Source( \d)? · Question \d+/);
+    await expect(page.getByTestId("source-pdf-link")).toHaveCount(0);
+    await go(page, `${C}/questions/${PDF84}`);
+    await page.getByTestId("reveal-answer").click();
+    await expect(page.getByTestId("answer-claims")).toContainText(/Source answer key \(Source \d\)/);
+    expect(await page.content()).not.toMatch(LEAK);
+
+    await go(page, `${C}/practice`);
+    await expect(page.getByTestId("mode-common")).toHaveCount(0);
+    await page.getByTestId("start-practice").click();
+    await page.waitForURL(new RegExp(`${C}/practice/[^/]+$`));
+    await expect(page.getByTestId("question-card")).toBeVisible();
+    expect(await page.content()).not.toMatch(LEAK);
+
+    await go(page, `${C}/mock`);
+    await page.getByTestId("mock-count").fill("3");
+    await page.getByTestId("start-mock").click();
+    await expect(page.getByTestId("mock-runner")).toBeVisible();
+    expect(await page.content()).not.toMatch(LEAK);
+
+    const cookies = { headers: { cookie: (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ") } };
+    for (const f of ["json", "csv"]) {
+      const res = await request.get(`/api/export/questions?format=${f}`, cookies);
+      expect(res.status(), f).toBe(200);
+      const body = await res.text();
+      expect(body, f).not.toMatch(LEAK);
+      expect(body, f).not.toMatch(/sourcePage|sourceUrl/);
+    }
+    expect((await request.get("/api/me/backup", cookies)).ok()).toBe(true);
+    expect(await (await request.get("/api/me/backup", cookies)).text()).not.toMatch(LEAK);
+    expect((await request.get("/api/pdf", cookies)).status()).toBe(404);
+    expect((await request.get("/api/pdf?v=ver_pmle_2026&s=pdf", cookies)).status()).toBe(404);
+    const missing = await request.get("/api/exhibit?q=999999&i=0", cookies);
+    expect(missing.status()).toBe(404);
+
+    // Source filters, sorts and searches in the URL have no effect for learners.
+    const all = await codes(page, `${C}/questions`);
+    expect(await codes(page, `${C}/questions?source=only%3Apdf&sort=qnum%3Apdf`)).toEqual(all);
+    expect(await codes(page, `${C}/questions?q=pdf%3A84`)).toEqual([]);
+    expect(await codes(page, `${C}/questions?q=examprepper`)).toEqual([]);
+    await go(page, `${C}/questions`);
+    await expect(page.getByTestId("search-input")).toBeVisible();
+    await expect(page.getByLabel("Source", { exact: true })).toHaveCount(0);
+  });
+
+  test("administrators keep full provenance: source names, PDF links, source filters, source search and export columns", async ({ page, request }) => {
+    await signIn(page, ADMIN);
+    await go(page, `${C}/questions/${PDF84}`);
+    await page.getByTestId("metadata-panel").locator("summary").click();
+    await expect(page.getByTestId("question-sources")).toContainText("PDF question bank · Question 84");
+    await expect(page.getByTestId("source-pdf-link")).toHaveAttribute("href", /^\/api\/pdf\?v=ver_pmle_2026&s=pdf#page=\d+$/);
+    await page.getByTestId("reveal-answer").click();
+    await expect(page.getByTestId("answer-claims")).toContainText("(PDF question bank)");
+
+    expect(await codes(page, `${C}/questions?q=pdf%2084`)).toContain(`open-${PDF84}`);
+    const ep = await codes(page, `${C}/questions?source=only%3Aexamprepper`);
+    expect(ep.length).toBeGreaterThan(0);
+    expect(ep.length).toBeLessThan((await codes(page, `${C}/questions`)).length);
+
+    const cookies = { headers: { cookie: (await page.context().cookies()).map((c) => `${c.name}=${c.value}`).join("; ") } };
+    const pdf = await request.get("/api/pdf?v=ver_pmle_2026&s=pdf", cookies);
+    expect(pdf.status()).toBe(200);
+    expect(pdf.headers()["content-type"]).toBe("application/pdf");
+    expect((await (await request.get("/api/export/questions?format=csv", cookies)).text()).split("\n")[0]).toContain("sources,sourcePage,sourceUrl");
+  });
+});
+
+test.describe("Exam Coverage & Quality and Exam Blueprint", () => {
+  test("administrators see the coverage overview: score with unique count, published weights, separate quality card, neutral sources", async ({ page }) => {
+    await signIn(page, ADMIN);
+    await go(page, C);
+    await expect(page.locator("aside nav")).toContainText("Exam Coverage & Quality");
+    await page.locator("aside nav").getByRole("link", { name: /Exam Coverage & Quality/ }).click();
+    await page.waitForURL(new RegExp(`${C}/data-quality$`));
+    await expect(page.getByRole("heading", { name: "Exam Coverage & Quality" })).toBeVisible();
+    await expect(page.getByTestId("dq-readonly")).toBeVisible();
+
+    const card = page.getByTestId("distribution-alignment");
+    await expect(card).toHaveAttribute("data-state", "verified");
+    await expect(card).toContainText("Blueprint Distribution Alignment");
+    await expect(card.getByTestId("bda-score")).toHaveText(/^(\d|[1-9]\d|100) \/ 100$/);
+    await expect(card).toContainText("Domain mix of 339 unique questions");
+    await expect(card).toContainText("does not measure exam readiness, content completeness, answer accuracy or question quality");
+    await expect(card).toContainText("Official weights verified");
+
+    const overview = page.getByTestId("coverage-overview");
+    expect(await overview.innerHTML()).not.toMatch(/ExamPrepper|examtopics|PDF question bank|ML_Engineer_Exam_Questions|https?:\/\/(?!services\.google)/i);
+    await expect(page.getByTestId("scaling-note")).toContainText("total 101%");
+    await expect(page.getByTestId("published-weight")).toHaveText(["13%", "16%", "21%", "20%", "18%", "13%"]);
+    await expect(page.getByTestId("blueprint-share")).toContainText("Unmapped");
+    const quality = page.getByTestId("question-quality");
+    await expect(quality).toContainText("Found in 2+ sources");
+    await expect(quality).toContainText("Exhibits without a local copy");
+    await expect(quality).not.toContainText("Alignment");
+    await expect(quality).not.toContainText("/ 100");
+    await expect(page.getByTestId("source-summary-row").locator("td").first()).toHaveText("Source 1");
+    await expect(page.getByTestId("source-summary-row")).toHaveCount(2);
+
+    await go(page, `${C}/data-quality?tab=imports`);
+    await expect(page.getByTestId("extraction-reports")).toContainText("ExamPrepper extraction");
+    await expect(page.getByTestId("inventory-identity-check")).toContainText("= 339");
+  });
+
+  test("learners get the slim official Exam Blueprint without personal stats, score or source names", async ({ page }) => {
+    await signIn(page, newEmail("blueprint"));
+    const html = (await go(page, `${C}/blueprint`)) && (await page.content());
+    expect(html).not.toMatch(LEAK);
+    expect(html).not.toContain("Blueprint Distribution Alignment");
+    for (const [n, w] of [[1, 13], [2, 16], [3, 21], [4, 20], [5, 18], [6, 13]]) await expect(page.getByTestId(`weight-${n}`)).toHaveText(`${w}%`);
+    await expect(page.locator("#obj-1\\.1")).toHaveCount(1);
+    await expect(page.locator("#dom-3")).toHaveCount(1);
+    await expect(page.getByTestId("blueprint-share")).toBeVisible();
+    const main = page.locator("main");
+    for (const stat of ["Accuracy", "Latest accuracy", "attempted"]) await expect(main, stat).not.toContainText(stat);
+    await expect(page.getByTestId("progress-link")).toHaveAttribute("href", `${C}/analytics`);
+    // Theory pages link to objective anchors on the Blueprint.
+    await go(page, `${C}/theory`);
+    const concept = await page.locator(`main a[href^="${C}/theory/"]`).first().getAttribute("href");
+    await go(page, concept!);
+    const objLink = page.locator(`a[href*="/blueprint#obj-"]`).first();
+    const href = (await objLink.getAttribute("href"))!;
+    await go(page, href);
+    await expect(page.locator(`[id="${decodeURIComponent(href.split("#")[1])}"]`)).toHaveCount(1);
+  });
+});
+
 test.describe("personal backups", () => {
   test("Download My Backup saves a complete file that restores into another account", async ({ browser }) => {
     const a = await newUser(browser, "backup-owner");
@@ -389,7 +575,10 @@ test.describe("personal backups", () => {
     expect(download.suggestedFilename()).toMatch(/^pmle-backup-backup-owner-.*\.json$/);
     const file = await download.path();
     const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    expect(data).toMatchObject({ format: "pmle-prep-progress", version: 3, account: { email: a.email } });
+    expect(data).toMatchObject({ format: "pmle-prep-progress", version: 4, account: { email: a.email } });
+    expect(data.attempts[0].sourceRefs.length).toBeGreaterThan(0);
+    expect(data.attempts[0]).not.toHaveProperty("sourceKeys");
+    expect(fs.readFileSync(file, "utf8")).not.toMatch(LEAK);
     expect(data.versions.map((v: { id: string }) => v.id)).toContain("ver_pmle_2026");
     expect(data.attempts).toHaveLength(1);
     expect(data.notes.map((n: { content: string }) => n.content)).toEqual(["backup me"]);
@@ -418,7 +607,7 @@ test.describe("certification home, versions and administration", () => {
     await expect(page.getByTestId("cert-card-pde")).toHaveCount(0);
     await expect(page.getByTestId("no-other-certs")).toBeVisible();
     await expect(page.getByTestId("add-certification")).toHaveCount(0);
-    for (const [legacy, now] of [["/questions", `${C}/questions`], ["/pdf", `${C}/sources/pdf`], ["/theory", `${C}/theory`], ["/mock", `${C}/mock`]]) {
+    for (const [legacy, now] of [["/questions", `${C}/questions`], ["/pdf", `${C}/questions`], ["/theory", `${C}/theory`], ["/mock", `${C}/mock`]]) {
       await go(page, legacy);
       await expect(page, legacy).toHaveURL(new RegExp(`${now.replace(/\//g, "\\/")}$`));
     }
@@ -487,8 +676,14 @@ test.describe("certification home, versions and administration", () => {
     await expect(page.locator(`[data-code="${code}"]`)).toContainText("Managed option, edited in review");
     await go(page, `/c/${slug}/data-quality`);
     await expect(page.getByTestId("dq-metrics")).toContainText("Valid");
-    await expect(page.getByTestId("dq-sources")).toContainText("fixture · json");
+    await expect(page.getByTestId("dq-sources")).toContainText("Source");
+    await expect(page.getByTestId("dq-sources")).not.toContainText("fixture");
     await expect(page.getByTestId("dq-sources")).toContainText("processed");
+    await expect(page.getByTestId("distribution-alignment")).toHaveAttribute("data-state", /unverified/);
+    await expect(page.getByTestId("bda-score")).toHaveCount(0);
+    await expect(page.getByTestId("distribution-alignment")).toContainText("4 unique questions");
+    await go(page, `/c/${slug}/data-quality?tab=imports`);
+    await expect(page.getByTestId("extraction-reports")).toContainText("fixture extraction");
     await go(page, `/c/${slug}/data`);
 
     const learner = await browser.newContext();

@@ -7,6 +7,7 @@ import { CheckCircle2, ChevronDown, CircleAlert, CircleHelp, ExternalLink, Eye, 
 import { submitAnswer, type SubmitResult } from "@/lib/actions";
 import { enqueue, type KeyEvent, newClientId, useKeyEvents } from "@/lib/sync-client";
 import { LEGACY_LABEL } from "@/lib/filters";
+import type { CardImage } from "@/lib/exhibits";
 import type { QuestionCardData } from "@/lib/question-data";
 import { cn } from "@/lib/utils";
 import { VERIFICATION_HELP, VERIFICATION_LABEL, type Verification } from "@/lib/verification";
@@ -14,15 +15,16 @@ import { AlignmentBadge, DomainBadge, LegacyBadge, VerificationBadge } from "./b
 import { Badge, Button, Card, Kbd } from "./ui";
 
 const CLAIM_LABEL: Record<string, string> = {
-  pdf_key: "PDF answer key",
-  examprepper_answer: "ExamPrepper answer",
+  pdf_key: "Source answer key",
+  examprepper_answer: "Source answer key",
   source_key: "Source answer key",
-  examtopics_key: "ExamTopics original key",
+  examtopics_key: "Original key",
+  original_key: "Original key",
   community_vote: "Community vote (top)",
   user_override: "Your resolution",
 };
 
-export function StemText({ stem, images }: { stem: string; images: { remote: string; local: string | null }[] }) {
+export function StemText({ stem, images }: { stem: string; images: CardImage[] }) {
   const parts = stem.split(/(\[\[img:\d+\]\])/g);
   return (
     <div className="prose-q text-[15px] text-fg">
@@ -310,11 +312,14 @@ export function QuestionCard({ data, sessionId, immediateFeedback = true, keyboa
               {data.verificationNote && <p className="mt-1 text-xs text-muted">{data.verificationNote}</p>}
             </div>
             <div>
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Answer claims by source</div>
-              <ul className="space-y-1 text-xs">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">Answer claims</div>
+              <ul className="space-y-1 text-xs" data-testid="answer-claims">
                 {data.claims.map((c, i) => (
                   <li key={i} className="flex flex-wrap items-center gap-1.5 text-fg-2">
-                    <span className="text-muted">{CLAIM_LABEL[c.kind] ?? c.kind}:</span>
+                    <span className="text-muted">
+                      {CLAIM_LABEL[c.kind] ?? c.kind}
+                      {c.sourceLabel && c.kind !== "user_override" && <span className="text-faint"> ({c.sourceLabel})</span>}:
+                    </span>
                     <span className="font-semibold">{c.labels.join(", ") || "-"}</span>
                     {c.percent !== null && <span className="text-faint">({c.percent}%)</span>}
                     {c.sourceLabels.join("") !== c.labels.join("") && <span className="text-faint">source letters {c.sourceLabels.join(", ")}</span>}
@@ -378,7 +383,7 @@ function Explanations({ data }: { data: QuestionCardData }) {
           <p className="prose-q text-[13px] text-fg-2">{e.content}</p>
         </div>
       ))}
-      {!source.length && <p className="text-xs text-faint">Neither source provides an explanation. None has been generated, to avoid presenting unverified reasoning as fact.</p>}
+      {!source.length && <p className="text-xs text-faint">No source provides an explanation. None has been generated, to avoid presenting unverified reasoning as fact.</p>}
       {community.length > 0 && (
         <details className="group rounded-lg border border-line bg-surface-2/40">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted hover:text-fg-2">
@@ -403,7 +408,6 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
   const L = useCertHref();
   const domainTitle = useDomainTitle();
   const cert = useCert();
-  const src = (id: string) => cert.sources.find((s) => s.id === id) ?? { id, name: id, kind: "website", short: id.toUpperCase().slice(0, 4) };
   const legacy = data.legacyNotes;
   const conf = useMemo(() => ({ high: "High", medium: "Medium", low: "Low" })[data.classificationConfidence] ?? data.classificationConfidence, [data.classificationConfidence]);
   return (
@@ -411,28 +415,28 @@ export function MetadataPanel({ data, defaultOpen = false }: { data: QuestionCar
       <summary className="flex cursor-pointer list-none items-center gap-2 px-5 py-2.5 text-xs text-muted hover:text-fg-2">
         <Info className="size-3.5" />
         Source & classification
-        <span className="text-faint">· {data.occurrences.map((o) => `${src(o.source).short} Q${o.qnum}`).join(" · ")}</span>
+        <span className="text-faint">· {data.occurrences.map((o) => `${o.sourceShort} Q${o.qnum}`).join(" · ")}</span>
         <ChevronDown className="ml-auto size-3.5 transition-transform group-open:rotate-180" />
       </summary>
       <div className="grid gap-5 px-5 pt-1 pb-5 text-xs md:grid-cols-3">
         <div>
           <div className="mb-1.5 font-semibold text-fg-2">Sources</div>
-          <ul className="space-y-1.5">
+          <ul className="space-y-1.5" data-testid="question-sources">
             {data.occurrences.map((o) => (
               <li key={o.key} className="text-fg-2">
-                {src(o.source).kind === "pdf" ? (
-                  <a className="inline-flex items-center gap-1 hover:text-accent" href={`/api/pdf?v=${encodeURIComponent(cert.versionId ?? "")}&s=${encodeURIComponent(o.source)}#page=${o.page ?? 1}`} target="_blank" rel="noreferrer">
-                    <FileText className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
+                {o.kind === "pdf" ? (
+                  <a className="inline-flex items-center gap-1 hover:text-accent" href={`/api/pdf?v=${encodeURIComponent(cert.versionId ?? "")}&s=${encodeURIComponent(o.source)}#page=${o.page ?? 1}`} target="_blank" rel="noreferrer" data-testid="source-pdf-link">
+                    <FileText className="size-3.5" /> {o.sourceLabel} · Question {o.qnum}
                     {o.page ? ` · Page ${o.page}` : ""}
                     {o.pageEnd && o.pageEnd !== o.page ? `–${o.pageEnd}` : ""}
                   </a>
                 ) : o.url ? (
                   <a className="inline-flex items-center gap-1 hover:text-accent" href={o.url} target="_blank" rel="noreferrer">
-                    <ExternalLink className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
+                    <ExternalLink className="size-3.5" /> {o.sourceLabel} · Question {o.qnum}
                   </a>
                 ) : (
                   <span className="inline-flex items-center gap-1">
-                    <FileText className="size-3.5" /> {src(o.source).name} · Question {o.qnum}
+                    <FileText className="size-3.5" /> {o.sourceLabel} · Question {o.qnum}
                   </span>
                 )}
                 {o.topicLabel && <div className="pl-5 text-faint">{o.topicLabel}</div>}

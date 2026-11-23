@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "./db";
-import { type Filters, type Scope, LEGACY_FLAGGED, scopeSourceId } from "./filters";
+import { type Filters, type Scope, LEGACY_FLAGGED, learnerFilters } from "./filters";
 import { parseJson } from "./json";
 import { getSettings } from "./settings";
 import { type AttemptLite, type QuestionStats, questionStats } from "./stats";
@@ -36,6 +36,8 @@ export type QuestionRow = {
   noteCount: number;
   stats: QuestionStats;
   searchText: string;
+  /** Source ids, numbers and keys; searchable by administrators only. */
+  sourceText: string;
 };
 
 /** Source ids of a version in display order (by first registration), used to order references consistently. */
@@ -74,15 +76,9 @@ export async function loadQuestionRows(userId: string, versionId: string): Promi
     const r = (refs.get(q.id) ?? []).sort((a, b) => (a.source === b.source ? a.qnum - b.qnum : rank(a.source) - rank(b.source)));
     const sourceIds = [...new Set(r.map((x) => x.source))];
     const f = fl.get(q.id);
-    const searchText = [
-      q.code,
-      q.stem,
-      ...q.options.map((o) => o.text),
-      q.topic,
-      q.subtopic,
-      q.objectiveCode,
-      ...r.map((x) => `${x.source} ${x.qnum} ${x.source === "examprepper" ? "ep" : ""} ${x.key}`),
-    ]
+    const searchText = [q.code, q.stem, ...q.options.map((o) => o.text), q.topic, q.subtopic, q.objectiveCode].join(" ").toLowerCase();
+    const sourceText = r
+      .map((x) => `${x.source} ${x.qnum} ${x.source === "examprepper" ? "ep" : ""} ${x.key}`)
       .join(" ")
       .toLowerCase();
     return {
@@ -113,16 +109,13 @@ export async function loadQuestionRows(userId: string, versionId: string): Promi
       noteCount: nc.get(q.id) ?? 0,
       stats: questionStats(att.get(q.id) ?? []),
       searchText,
+      sourceText,
     };
   });
 }
 
 function inScope(r: QuestionRow, scope: Scope): boolean {
-  const sid = scopeSourceId(scope);
-  if (sid !== null) return r.sourceIds.includes(sid);
   switch (scope) {
-    case "common":
-      return r.isCommon;
     case "marked":
       return r.marked;
     case "flagged":
@@ -136,10 +129,13 @@ function inScope(r: QuestionRow, scope: Scope): boolean {
   }
 }
 
-/** "pdf 84" / "ep:136" / "<source> <n>" finds a source's own question number; "Q-12" finds a canonical code. */
-function matchesSearch(r: QuestionRow, q: string, sources: Set<string>): boolean {
+/**
+ * "Q-12" finds a canonical code; other text matches stems, options, topics and objectives. With source search
+ * (administrators), "pdf 84" / "ep:136" / "<source> <n>" finds a source's own question number and source keys match.
+ */
+function matchesSearch(r: QuestionRow, q: string, sources: Set<string> | null): boolean {
   const s = q.trim();
-  const m = /^([a-z][a-z0-9_-]{0,39}?)[\s:#-]*(\d+)$/i.exec(s);
+  const m = sources && /^([a-z][a-z0-9_-]{0,39}?)[\s:#-]*(\d+)$/i.exec(s);
   if (m) {
     const word = m[1].toLowerCase();
     const src = word === "ep" ? "examprepper" : word;
@@ -147,14 +143,17 @@ function matchesSearch(r: QuestionRow, q: string, sources: Set<string>): boolean
   }
   const qc = /^q-?0*(\d+)$/i.exec(s);
   if (qc) return Number(r.code.replace(/^\D+/, "")) === Number(qc[1]);
-  const terms = s.toLowerCase().replace(/ep:/g, "examprepper:").split(/\s+/).filter(Boolean);
-  return terms.every((t) => r.searchText.includes(t));
+  const text = sources ? `${r.searchText} ${r.sourceText}` : r.searchText;
+  const terms = (sources ? s.toLowerCase().replace(/ep:/g, "examprepper:") : s.toLowerCase()).split(/\s+/).filter(Boolean);
+  return terms.every((t) => text.includes(t));
 }
 
-export function filterRows(rows: QuestionRow[], scope: Scope, f: Filters): QuestionRow[] {
+/** `sourceSearch` (administrators only) enables source search, the source filter and source question-number sorts. */
+export function filterRows(rows: QuestionRow[], scope: Scope, f0: Filters, opts: { sourceSearch?: boolean } = {}): QuestionRow[] {
+  const f = learnerFilters(f0, !!opts.sourceSearch);
   let out = rows.filter((r) => inScope(r, scope));
   if (f.q) {
-    const sources = new Set(rows.flatMap((r) => r.sourceIds));
+    const sources = opts.sourceSearch ? new Set(rows.flatMap((r) => r.sourceIds)) : null;
     out = out.filter((r) => matchesSearch(r, f.q!, sources));
   }
   if (f.domain?.length) out = out.filter((r) => r.domainNumber !== null && f.domain!.includes(r.domainNumber));

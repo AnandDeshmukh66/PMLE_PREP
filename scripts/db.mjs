@@ -23,12 +23,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sqliteSchema = path.join(root, "prisma", "schema.prisma");
 const pgSchema = path.join(root, "prisma", "postgres", "schema.prisma");
 
+// Same precedence as Next.js: real environment first, then .env.local, then .env (a value already set is never replaced).
 function loadDotEnv() {
-  const file = path.join(root, ".env");
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    const m = /^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*(.*)\s*$/.exec(line);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  for (const name of [".env.local", ".env"]) {
+    const file = path.join(root, name);
+    if (!fs.existsSync(file)) continue;
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      const m = /^\s*(DATABASE_URL|DIRECT_URL)\s*=\s*(.*)\s*$/.exec(line);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
   }
 }
 

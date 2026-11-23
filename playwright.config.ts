@@ -1,10 +1,14 @@
 import { defineConfig, devices } from "@playwright/test";
+import fs from "node:fs";
 import path from "node:path";
+import { parseGuideWeights } from "./lib/blueprint";
 
 const PORT = 3100;
 const dbUrl = `file:${path.join(__dirname, "data", "test-e2e.db")}`;
 /** Run against an already running server instead (e.g. `next dev` opened via the network address). It must use ALLOWED_EMAIL_DOMAINS=acme-corp.com. */
 const external = process.env.E2E_BASE_URL;
+/** The test bank's published PMLE version is verified against the stored official guide, so the admin score renders. */
+const verifiedWeights = `ver_pmle_2026=${parseGuideWeights(fs.readFileSync(path.join(__dirname, "data/raw/guide/guide.txt"), "utf8")).map((s) => s.weight).join(",")}`;
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -32,6 +36,7 @@ export default defineConfig({
           INGEST_BROWSER: "off",
           BACKUP_INTERVAL_HOURS: "0",
           BACKUP_DIR: path.join(__dirname, "data", "test-e2e-backups"),
+          BLUEPRINT_VERIFIED_WEIGHTS: verifiedWeights,
         },
         reuseExistingServer: false,
         timeout: 240_000,

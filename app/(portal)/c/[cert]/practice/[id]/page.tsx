@@ -6,7 +6,8 @@ import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat } from "@/compone
 import { prisma } from "@/lib/db";
 import { parseJson } from "@/lib/json";
 import { toCardData } from "@/lib/question-data";
-import { loadQuestionDetail } from "@/lib/questions";
+import { displaySessionTitle } from "@/lib/filters";
+import { loadQuestionDetail, versionSources } from "@/lib/questions";
 import { getSettings } from "@/lib/settings";
 import { domainShort, fmtDuration, pct } from "@/lib/utils";
 import { certPage, versionDomains } from "@/lib/cert";
@@ -36,6 +37,7 @@ export default async function PracticeSessionPage({ params, searchParams }: { pa
   const total = session.questions.length;
   const answered = session.questions.filter((q) => q.answeredAt).length;
   const showSummary = sp.summary === "1" || session.status !== "active";
+  const title = displaySessionTitle(session.title, session.config, user.isAdmin);
 
   if (showSummary) {
     const graded = session.questions.filter((q) => q.answeredAt && q.isCorrect !== null);
@@ -56,7 +58,7 @@ export default async function PracticeSessionPage({ params, searchParams }: { pa
       <div className="animate-in">
         <PageHeader
           crumbs={[{ label: "Practice", href: L("/practice") }, { label: "Summary" }]}
-          title={session.title}
+          title={title}
           description={session.status === "active" ? "Session in progress. You can return to it at any time." : `Session ${session.status}.`}
           actions={
             <div className="flex gap-2">
@@ -123,12 +125,12 @@ export default async function PracticeSessionPage({ params, searchParams }: { pa
   const current = session.questions[index];
   const detail = await loadQuestionDetail(version.id, current.question.code, user.id);
   if (!detail) notFound();
-  const data = toCardData(detail, settings.gradeContested);
+  const data = toCardData(detail, settings.gradeContested, { admin: user.isAdmin, sources: await versionSources(version.id) });
   const o = outcomeOf(current);
 
   return (
     <div className="animate-in">
-      <PageHeader crumbs={[{ label: "Practice", href: L("/practice") }, { label: session.title }]} title={session.title} description={`${answered} of ${total} answered${session.immediateFeedback ? "" : " · feedback shown at the end"}`} />
+      <PageHeader crumbs={[{ label: "Practice", href: L("/practice") }, { label: title }]} title={title} description={`${answered} of ${total} answered${session.immediateFeedback ? "" : " · feedback shown at the end"}`} />
       <PracticeRunner
         key={current.id}
         sessionId={id}

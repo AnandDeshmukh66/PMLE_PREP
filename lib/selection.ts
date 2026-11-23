@@ -22,7 +22,7 @@ export type PracticeMode = "all" | "common" | "domain" | "topic" | "incorrect" |
 
 export const PRACTICE_MODES: Record<PracticeMode, { title: string; description: string }> = {
   all: { title: "All questions", description: "Practice the full unique bank." },
-  common: { title: "Common questions", description: "Questions present in both sources." },
+  common: { title: "Common questions", description: "Questions found in more than one source." },
   domain: { title: "Domain practice", description: "Pick one or more official exam domains." },
   topic: { title: "Topic practice", description: "Pick one or more theory concepts." },
   incorrect: { title: "Incorrect questions", description: "Retry questions whose latest graded attempt was wrong." },
@@ -32,6 +32,9 @@ export const PRACTICE_MODES: Record<PracticeMode, { title: string; description: 
   high_alignment: { title: "High alignment", description: "Questions scoring ≥ 0.75 against the June 2026 guide." },
   weak_area: { title: "Weak areas", description: "Topics with accuracy below 70% after at least 3 graded attempts." },
 };
+
+/** Modes that depend on source membership. Kept for validation of saved configs; learners get "all" instead. */
+export const LEARNER_HIDDEN_MODES: PracticeMode[] = ["common"];
 
 export type PracticeConfig = {
   mode: PracticeMode;

@@ -1,6 +1,6 @@
 # Current state
 
-Audit baseline: **2026-11-20**. Describes the application as it exists in the working tree. Test and live-data figures come from the last verification run (**2026-11-05**) and are labelled as such. See [README.md](README.md) for how this file is maintained and [architecture/](architecture/) for structure details.
+Audit baseline: **2026-11-20**, updated **2026-11-21** for the Questions & Review consolidation and Exam Coverage & Quality ([plan](implementation-plans/exam-guide-mapping.md)). Describes the application as it exists in the working tree. Test and live-data figures come from the last verification run (**2026-11-05**) and are labelled as such. See [README.md](README.md) for how this file is maintained and [architecture/](architecture/) for structure details.
 
 Status labels: **Working** (implemented and exercised by tests or manual runs), **Partial** (implemented with stated gaps), **Unverified** (code exists, not exercised), **Missing** (not implemented).
 
@@ -52,9 +52,9 @@ proxy.ts, instrumentation.ts          request gate; boot-time backup scheduler
 
 - **Rendering.** Server Components fetch data directly with Prisma (no REST layer for pages). Interactive parts are client components in `components/`. All portal routes are dynamic (`ƒ` in the build output).
 - **Layouts.** `app/(portal)/layout.tsx` calls `requireUser()` and mounts `SyncProvider` (client autosave outbox). `app/(portal)/c/[cert]/layout.tsx` calls `certAdminPage()`, loads sidebar counts and renders `AppShell` + `Sidebar`; `(home)/layout.tsx` renders the shell without certification context.
-- **Certification routing.** Every study page lives under `/c/<slug>/…` (`lib/cert-rules.ts: certBase`). Pre-multi-certification URLs (`/questions`, `/practice`, `/mock`, `/theory`, `/plan`, `/analytics`, `/blueprint`, `/common`, `/review`, `/flagged`, `/incorrect`, `/bookmarks`, `/data-quality`) redirect to `/c/pmle/…`; `/pdf` and `/examprepper` redirect to `/c/pmle/sources/pdf` and `/c/pmle/sources/examprepper` (`next.config.ts`).
-- **Pages under `/c/[cert]/`:** dashboard (`page.tsx`), `plan`, `practice` (+ `[id]`), `mock` (+ `[id]`), `questions` (+ `[code]`), `common` (questions shared by several sources), `sources/[sourceId]` (per-source question list), `review`, `flagged`, `incorrect`, `bookmarks`, `theory` (+ `[id]`), `blueprint`, `analytics`, `history` (version history), `data-quality`, `data` (admin Data Settings).
-- **Sidebar** (`components/sidebar.tsx`): Dashboard, Study Plan, Practice, Mock Examination; Question bank (All, Common when more than one source, one entry per source); Review (Marked, Flagged, Incorrect, Bookmarks); Study (Theory Checklist, Exam Blueprint, Analytics, Version History); Content (Data Quality when a version is published; Data Settings for admins); All certifications; Settings. Counts come from `sidebarData()` in the certification layout.
+- **Certification routing.** Every study page lives under `/c/<slug>/…` (`lib/cert-rules.ts: certBase`). Pre-multi-certification URLs (`/questions`, `/practice`, `/mock`, `/theory`, `/plan`, `/analytics`, `/blueprint`, `/review`, `/flagged`, `/incorrect`, `/bookmarks`, `/data-quality`) redirect to `/c/pmle/…`. The former source and Common views redirect to All Questions, keeping the query string: `/pdf`, `/examprepper`, `/common(/…)` → `/c/pmle/questions`; `/c/<slug>/common(/…)` and `/c/<slug>/sources/<id>` → `/c/<slug>/questions` (all temporary redirects, `next.config.ts`). Old `?from=pdf|examprepper|common` links on question pages fall back to All Questions.
+- **Pages under `/c/[cert]/`:** dashboard (`page.tsx`), `plan`, `practice` (+ `[id]`), `mock` (+ `[id]`), `questions` (+ `[code]`), `review`, `flagged`, `incorrect`, `bookmarks`, `theory` (+ `[id]`), `blueprint`, `analytics`, `history` (version history), `data-quality` (Exam Coverage & Quality, administrators only), `data` (admin Data Settings).
+- **Sidebar** (`components/sidebar.tsx`): Dashboard, Study Plan, Practice, Mock Examination; **Questions & Review** (All Questions, Marked for Review, Flagged Questions, Incorrect Questions, Bookmarks); Study (Theory Checklist, Exam Blueprint, Analytics, Version History); Content, administrators only (Exam Coverage & Quality when a version is published, Data Settings); All certifications; Settings. Counts come from `sidebarData()` in the certification layout; source lists and the open-issue count are loaded for administrators only.
 - **Autosave client** (`lib/sync-client.ts`, `components/sync-provider.tsx`, `components/autosave.tsx`): a per-user outbox that sends flag, note, theory, setting, study-task, answer, mock-answer, mock-mark, session-index and location changes to server actions. Each change carries a client timestamp (`rev`); the server ignores older writes. Unsent changes persist in `localStorage`, retry with exponential backoff (cap 30 s), survive reloads, are shared across tabs via `BroadcastChannel`, and pause on an expired session. Status: **Working** (e2e tests for offline, reload, multi-tab, hung request).
 - **One-off server calls** from event handlers use `lib/call-server.ts` (`callServer`), converting network failures into inline messages.
 - **Dev hydration marker:** pages set `html[data-hydrated="true"]` (`components/hydration-watch.tsx`), which the e2e tests wait on.
@@ -68,10 +68,11 @@ There is no separate backend service. Server logic is: Server Components, server
 | Route | Method | Access | Purpose |
 |---|---|---|---|
 | `/api/health` | GET | public | Liveness: runs `examDomain.count()`; 200 `{ok:true}` or 503. |
-| `/api/me/backup`, `/api/export/progress` | GET | signed-in | Download the caller's personal progress backup (JSON, format v3). `export/progress` re-exports the same handler. |
-| `/api/me/restore` | POST | signed-in, same-origin | Validate and merge-restore a personal backup (max 25 MB). |
-| `/api/export/questions` | GET | signed-in | Question export as JSON/CSV. |
-| `/api/pdf` | GET `?v=&s=` | signed-in | Streams a stored source PDF (from `UploadedFile.data`, or legacy `data/raw/pdf/` file). Non-published versions only for content managers. |
+| `/api/me/backup`, `/api/export/progress` | GET | signed-in | Download the caller's personal progress backup (JSON, format v4: neutral question references `#<n>:<number>` plus question codes, no source identities). `export/progress` re-exports the same handler. |
+| `/api/me/restore` | POST | signed-in, same-origin | Validate and merge-restore a personal backup (max 25 MB). Accepts v1 to v4; v1 to v3 files with raw source keys restore as before. |
+| `/api/export/questions` | GET | signed-in | Question export as JSON/CSV. The `sources`, `sourcePage` and `sourceUrl` columns are included for administrators only. |
+| `/api/pdf` | GET `?v=&s=` | admin | Streams a stored source PDF (from `UploadedFile.data`, or legacy `data/raw/pdf/` file). Learners get 404. Non-published versions only for content managers. |
+| `/api/exhibit` | GET `?q=&i=` | signed-in | Streams exhibit image `i` of canonical question `q` (primary occurrence's local copy). Visible versions for everyone, drafts for content managers. Path confined to `public/question-assets/`, image types allowlisted, `cache-control: private`, `nosniff`. |
 | `/api/ingest/upload` | POST | admin + elevated, same-origin | Stores a PDF/JSON upload and creates a **pending** ingestion job. 25 MB limit. Does not start processing. |
 | `/api/backup` | GET, POST | admin + elevated | List / create server-side database snapshots. |
 | `/api/admin/db-snapshot` | GET | admin + elevated | Download a fresh snapshot. |
@@ -91,7 +92,7 @@ There is no separate backend service. Server logic is: Server Components, server
 
 ### Key business-logic modules
 
-`lib/versions.ts` (draft/review/publish, fingerprint, readiness), `lib/canonicalize.ts` (merge source occurrences into canonical questions), `lib/verification.ts` (answer confidence from claims), `lib/grading.ts`, `lib/selection.ts` + `lib/allocation.ts` (practice/mock selection), `lib/mock.ts` (mock grading), `lib/ingest/*` (ingestion), `lib/quality.ts` (draft quality metrics), `lib/question-edit.ts` (manual question edits), `lib/review-queue.ts`, `lib/bulk.ts` (typed bulk SQL), `lib/progress-io.ts` (personal backup), `lib/backup*.ts` (database snapshots), `lib/claim.ts`.
+`lib/versions.ts` (draft/review/publish, fingerprint, readiness), `lib/canonicalize.ts` (merge source occurrences into canonical questions), `lib/verification.ts` (answer confidence from claims), `lib/grading.ts`, `lib/selection.ts` + `lib/allocation.ts` (practice/mock selection), `lib/mock.ts` (mock grading), `lib/ingest/*` (ingestion), `lib/quality.ts` (draft quality metrics, per-source counts, exhibit gaps), `lib/blueprint.ts` (Blueprint Distribution Alignment, verification gate, guide-weight parsing; pure), `lib/exhibits.ts` (neutral exhibit URLs, path confinement), `lib/question-edit.ts` (manual question edits), `lib/review-queue.ts`, `lib/bulk.ts` (typed bulk SQL), `lib/progress-io.ts` (personal backup), `lib/backup*.ts` (database snapshots), `lib/claim.ts`.
 
 ## 6. Authentication and authorization
 
@@ -112,8 +113,8 @@ There is **no role table**. Roles are derived at request time (`lib/auth.ts: Cur
 
 | Role | How determined | Can do |
 |---|---|---|
-| Learner | Signed in with an allowed domain | Study published/archived content of any visible certification; all personal data scoped to own `userId`; read-only Data Quality for the published version. |
-| Admin (allowlisted) | Email in `ADMIN_EMAILS` | Sees unpublished certifications and drafts; opens Data Settings and draft Data Quality in read-only mode until elevated. |
+| Learner | Signed in with an allowed domain | Study published/archived content of any visible certification; all personal data scoped to own `userId`. Sees questions under neutral labels ("Source", "Source 1…N") without original source names, URLs, pages, files or keys; no Exam Coverage & Quality page (404). |
+| Admin (allowlisted) | Email in `ADMIN_EMAILS` | Sees unpublished certifications and drafts and full source provenance (names, PDF links, source filters, sorts and search, export columns); opens Data Settings and Exam Coverage & Quality in read-only mode until elevated. |
 | Admin (elevated) = `canManageContent` | Allowlisted **and** session unlocked | Changes shared content: certifications, versions, ingestion, duplicate/answer/classification decisions, question edits, snapshots. |
 
 Elevation (`lib/admin-actions.ts`): the user enters `ADMIN_ACCESS_CODE` (min 8 chars) in Settings; compared in constant time; valid for `ADMIN_ELEVATION_HOURS` (default 8, 1 to 24), stored in `AuthSession.elevatedUntil`; 5 failures in 15 minutes lock the account (counted from `AuditEvent`). With no code set: development lets allowlisted users through ("exempt"); production fails closed ("disabled"). Admin events are written to `AuditEvent`.
@@ -126,14 +127,14 @@ There are no personal workspaces, organisations or per-certification roles.
 |---|---|---|
 | Certification home with per-certification progress, drafts hidden from learners | Working | `app/(portal)/(home)/page.tsx`, `lib/cert.ts: loadHomeCards` |
 | Dashboard, continue-where-you-left-off | Working | `app/(portal)/c/[cert]/page.tsx`, `User.lastPath` via `recordLocation` |
-| Question bank views (all, common, per source, marked, flagged, incorrect, bookmarks), filters, search, jump, prev/next | Working | `components/question-bank.tsx`, `lib/questions.ts`, `lib/filters.ts` |
-| Question card: single/multi-select, partial credit, notes, flags, attempt history, traceability to sources | Working | `components/question-card.tsx`, `lib/actions.ts: submitAnswer` |
-| Practice sessions (10 selection modes plus "practice this list"), resumable, summaries | Working | `lib/selection.ts`, `components/practice-*.tsx` |
+| Questions & Review views (All Questions, Marked for Review, Flagged, Incorrect, Bookmarks), filters, search, jump, prev/next | Working | `components/question-bank.tsx`, `lib/questions.ts`, `lib/filters.ts`. Source filter, source sorts and source-number search are administrator-only and ignored for learners (`learnerFilters`). |
+| Question card: single/multi-select, partial credit, notes, flags, attempt history, neutral source labels | Working | `components/question-card.tsx`, `lib/question-data.ts: toCardData` (redacts provenance for learners), `lib/actions.ts: submitAnswer` |
+| Practice sessions (10 selection modes plus "practice this list"; the source-membership mode `common` is administrator-only), resumable, summaries | Working | `lib/selection.ts`, `components/practice-*.tsx`. Older sessions titled after a source display as "All Questions"; stored titles are unchanged. |
 | Mock exam (default 60 questions / 120 min, weight-based domain allocation, refresh-safe timer, auto-submit) | Working | `lib/actions.ts: createMockExam`, `lib/mock.ts`, `components/mock-runner.tsx` |
 | Theory checklist (status, confidence, notes per concept) | Working for PMLE | `lib/actions.ts: syncTheory`; concepts exist only where a version has them |
-| Blueprint, analytics (including revision queue), study plan | Working | `lib/analytics.ts`, `lib/plan.ts` |
+| Exam Blueprint (official weights as published, weight vs. bank share, objectives and considerations; no personal stats or score), analytics (including revision queue), study plan | Working | `app/(portal)/c/[cert]/blueprint/page.tsx`, `components/blueprint-share.tsx`, `lib/analytics.ts`, `lib/plan.ts` |
 | Settings (exam date, hours, practice/mock defaults, theme, shortcuts) | Working | `lib/settings.ts` (stored per user in `Setting`) |
-| Personal backup download and merge restore | Working | `lib/progress-io.ts` |
+| Personal backup download and merge restore (format v4, neutral references) | Working | `lib/progress-io.ts` |
 | Version history (progress on archived versions) | Partial | `history/page.tsx` lists per-version stats and the last 100 attempts of a chosen archived version. Practice, mock and browsing always use the **current published** version; archived questions cannot be practised from the UI. |
 | Study features for certifications other than PMLE | Unverified | Code is certification-agnostic and e2e-tested with a 4-question fixture; no second real certification has been published. |
 
@@ -141,11 +142,12 @@ Behavioural details:
 
 - Learners can read only versions with status `published` or `archived`; drafts/review return "not found" (`lib/cert.ts`, `lib/actions.ts`).
 - Progress is per question **per version**. A new published version starts with fresh progress; attempts on the old version stay and appear in Version History.
+- Learner page data, APIs, exports, backups and exhibit URLs carry no original source identity (`toCardData`, `CertProvider sources` empty for learners, `/api/exhibit`). The original image files remain at their paths under `public/question-assets/` behind sign-in; no learner response references them.
 - Answers are graded only if the question's verification status is gradable (`verified`, `source_key`, `user_verified`, plus `contested` when the user enables `gradeContested`) and it has a complete key. Otherwise feedback is provisional and `isCorrect` is null (`lib/verification.ts`, `lib/grading.ts`).
 
 ## 9. Admin-facing functionality
 
-All in `/c/[cert]/data` (Data Settings), `/c/[cert]/data-quality`, `/certifications/new`, and `/settings#admin-access`.
+All in `/c/[cert]/data` (Data Settings), `/c/[cert]/data-quality` (Exam Coverage & Quality), `/certifications/new`, and `/settings#admin-access`.
 
 | Feature | Status | Notes |
 |---|---|---|
@@ -155,7 +157,8 @@ All in `/c/[cert]/data` (Data Settings), `/c/[cert]/data-quality`, `/certificati
 | Versions table, create draft (empty / copy exam guide / copy everything), duplicate-label rejection, delete unpublished draft | Working | `lib/versions.ts`, `components/data-settings.tsx` |
 | Source intake: PDF/JSON upload, website URL, multiple sources per draft, remove source | Working | `app/api/ingest/upload/route.ts`, `submitUrlAction`, `removeSourceAction` |
 | Explicit **Start processing**, retry, cancel; lifecycle stepper; per-source status/counts/errors | Working | `lib/ingest/jobs.ts`, `app/(portal)/c/[cert]/data/page.tsx`. Verified end to end on a Neon demo schema on 2026-11-05. |
-| Data Quality dashboard per draft (totals, valid/invalid, duplicates, review counts, mapped/unmapped, per-source table, issue kinds) | Working | `lib/quality.ts`, `app/(portal)/c/[cert]/data-quality/page.tsx` |
+| Exam Coverage & Quality (administrators only; learners get 404). Overview: Blueprint Distribution Alignment card with the unique question count, exam weight vs. bank share, domain coverage table, a separate question-quality card (overlap, conflicts, review items, verification and legacy breakdowns, exhibits without a local copy, validity metrics), and a per-source table under neutral labels. Extraction reports with real source names are on the Import runs tab. | Working | `lib/quality.ts`, `lib/blueprint.ts`, `components/distribution-card.tsx`, `components/blueprint-share.tsx`, `app/(portal)/c/[cert]/data-quality/page.tsx` |
+| Blueprint Distribution Alignment: 100 × Σ min(bank share, scaled official weight) over all unique questions (unmapped count as misaligned). Measures only the domain mix, not readiness, completeness, accuracy or quality. Shown only when `BLUEPRINT_VERIFIED_WEIGHTS` holds the version's stored weights exactly; otherwise "unavailable" with the reason. | Working | Verified for production `ver_pmle_2026` on 2026-11-21 (read-only; plan section 14). `scripts/verify-exam-weights.ts` repeats the check. |
 | Questions tab: filters, search, provenance, inline question editor, exclude/restore source occurrence | Working | `components/question-editor.tsx`, `lib/question-edit.ts` |
 | Duplicate decisions (same/different/undo), answer resolution, issue resolve/ignore, manual classification | Working | `lib/actions.ts`, `components/dq-actions.tsx` |
 | Review readiness, submit for review, publish (atomic, fingerprint-checked), return to draft | Working | `lib/versions.ts` |
@@ -206,7 +209,7 @@ Detailed reference: [INGESTION.md](INGESTION.md). Summary of what exists:
 3. Add sources to the draft: upload a PDF/JSON or enter a website URL. Each becomes a **pending** job; nothing is processed yet.
 4. Click **Start processing**: pending jobs become queued and run in the background, one at a time.
 5. Watch source states (waiting, queued, processing, processed, failed). Retry or remove failed sources.
-6. Open Data Quality for the draft: review summary, edit questions, decide duplicates, resolve or ignore issues, exclude bad occurrences.
+6. Open Exam Coverage & Quality for the draft: review summary, edit questions, decide duplicates, resolve or ignore issues, exclude bad occurrences.
 7. Data Settings → readiness shows blockers → Submit for review (computes fingerprint) → Publish (atomic; previous version archived).
 8. Learners now see the new version; they start with fresh progress on it.
 
@@ -233,6 +236,7 @@ Variables read by the code (names only; see `.env.example` for comments, [DEPLOY
 | `INGEST_BROWSER` (`off` disables), `INGEST_INLINE` (`off` disables in-process processing), `INGEST_ALLOW_PRIVATE_HOSTS` (`1`, ignored in production) | Ingestion behaviour. |
 | `BACKUP_DIR`, `BACKUP_INTERVAL_HOURS`, `BACKUP_KEEP`, `BACKUP_RETENTION_DAYS` | Snapshots. Scheduler default: 24 h on SQLite, off on PostgreSQL. |
 | `DEV_ALLOWED_ORIGINS` | Extra dev origins for `next dev` (`lib/dev-origins.ts`). |
+| `BLUEPRINT_VERIFIED_WEIGHTS` | `<versionId>=<w1>,…;…`: per content version, the stored exam-domain weights that passed `scripts/verify-exam-weights.ts`. Gates the admin Blueprint Distribution Alignment score; unset or different means "unavailable". |
 
 Runtime requirements: Node 20.9+ (README, DEPLOYMENT.md); `scripts/copy-sqlite-to-postgres.ts` needs Node 22.13+ (`node:sqlite`); Python venv with `requirements.txt` for the PMLE pipeline and PDFs. `next.config.ts` raises the proxy body limit to 26 MB for uploads and the server-action body limit is 2 MB. Local data files `data/pmle.db`, `data/backups/`, `data/test-*.db` are gitignored.
 
@@ -240,16 +244,17 @@ Local commands: `npm run setup` (migrate + generate + import PMLE bank), `npm ru
 
 ## 16. Testing and validation
 
-Last run on 2026-11-05 (after the final change; re-run before relying on these numbers):
+Last run on 2026-11-21 (after the final change; re-run before relying on these numbers):
 
 | Suite | Result |
 |---|---|
-| `tsc --noEmit`, `eslint .`, `next build` | clean |
-| Vitest on PostgreSQL via PGlite (`TEST_PG_URL`, `--no-file-parallelism`) | 171 passed, 3 skipped |
-| Vitest on SQLite | 174 passed |
-| Playwright e2e (SQLite database, port 3100, builds the app itself) | 18 passed |
+| `tsc --noEmit`, `eslint .`, `next build` | clean (the build prints a Next.js security advisory for 16.4.3; see section 17) |
+| Vitest on PostgreSQL via PGlite (`TEST_PG_URL`, `--no-file-parallelism`, `pglite-server --max-connections=4`) | 221 passed, 3 skipped |
+| Vitest on SQLite | 224 passed |
+| Playwright e2e (SQLite database, port 3100) | 23 passed |
 
-- Test files: `tests/unit/*` (grading, allocation, selection, verification, dedupe, ingestion, auth rules, bulk SQL, stats/plan), `tests/integration/*` (app data, certifications/versions/ingestion/editing, multi-user, SQLite-only migration), `tests/e2e/app.spec.ts`.
+- Test files: `tests/unit/*` (grading, allocation, selection, verification, dedupe, ingestion, auth rules, bulk SQL, stats/plan, blueprint and filters, exhibits, distribution card, weight verifier), `tests/integration/*` (app data, certifications/versions/ingestion/editing, multi-user, source abstraction, coverage, SQLite-only migration), `tests/e2e/app.spec.ts` (includes a learner source-leak suite and an admin provenance suite).
+- PGlite's socket server allows one connection by default; the backup round-trip test opens a second client, so start it with `--max-connections` above 1.
 - The Prisma client is generated for **one** provider at a time; switching between SQLite tests/e2e and PostgreSQL requires `npm run db:generate` with the right `DATABASE_URL`. Running Vitest with `TEST_PG_URL` set in the shell silently selects PostgreSQL.
 - **Never run tests against Neon.** Tests create and drop schemas named `test_*`.
 - An admin end-to-end flow (create draft, upload text and scanned PDFs, add a website, process, retry, edit, resolve, publish, learner view) was executed manually through a browser script against a Neon demo schema on 2026-11-05; it is not an automated test. The Playwright admin test uses a JSON fixture instead.
@@ -273,7 +278,8 @@ Technical concerns:
 9. **Question counts can change when content is added to a draft that already holds a bank**, because canonical questions are rebuilt and new duplicate links merge occurrences (behaviour of `lib/canonicalize.ts`; the exact effect on a given bank was not documented).
 10. **Unprocessed OCR output is noisy** (e.g. "Vertex Al") and carries no answer key; it is gated by a blocking review item.
 11. **Neon CLI features** (init/deploy/branching, `neon.ts`, `.neon`) were not completed; they need an interactive `neon login`. The app does not depend on them.
-12. **Credentials were pasted into chat during development** (Neon owner password). Rotating it is recommended; it is not recorded in any tracked file.
+12. **Next.js advisory.** `next build` reports that Next.js 16.4.3 is affected by a known security vulnerability and recommends upgrading. Not addressed in the 2026-11-21 change (no dependency changes).
+13. **Credentials were pasted into chat during development** (Neon owner password). Rotating it is recommended; it is not recorded in any tracked file.
 
 Known documentation inconsistencies (code wins):
 

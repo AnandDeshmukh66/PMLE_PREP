@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, CalendarClock, CheckCircle2, Info, Play, Timer, XCircle } from "lucide-react";
+import { ArrowRight, CalendarClock, Info, Play, Timer } from "lucide-react";
 import { ExamDateForm, TaskList } from "@/components/plan-ui";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, ProgressBar, ProgressRing, Stat } from "@/components/ui";
 import { loadAnalytics, nextAction, revisionQueue } from "@/lib/analytics";
 import { prisma } from "@/lib/db";
-import { LEGACY_FLAGGED } from "@/lib/filters";
+import { displaySessionTitle, LEGACY_FLAGGED } from "@/lib/filters";
 import { computeInventory } from "@/lib/inventory";
 import { loadPlan } from "@/lib/plan-data";
 import { getSettings } from "@/lib/settings";
@@ -139,7 +139,7 @@ export default async function Dashboard({ params }: { params: Promise<{ cert: st
                 {active.map((s) => (
                   <Link key={s.id} href={L(s.kind === "mock" ? `/mock/${s.id}` : `/practice/${s.id}`)} className="flex items-center gap-3 px-5 py-2.5 text-xs hover:bg-white/[0.02]">
                     {s.kind === "mock" ? <Timer className="size-4 text-warn" /> : <Play className="size-4 text-accent" />}
-                    <span className="flex-1 truncate text-fg-2">{s.title}</span>
+                    <span className="flex-1 truncate text-fg-2">{displaySessionTitle(s.title, s.config, user.isAdmin)}</span>
                     <span className="text-faint">{s._count.questions} questions</span>
                   </Link>
                 ))}
@@ -148,41 +148,19 @@ export default async function Dashboard({ params }: { params: Promise<{ cert: st
           )}
           <Card className="p-5">
             <div className="mb-3 flex items-center justify-between">
-              <div className="text-[13px] font-semibold text-fg">Question inventory</div>
-              <Link href={L("/data-quality")} className="text-xs text-muted hover:text-accent">
-                Data quality →
-              </Link>
+              <div className="text-[13px] font-semibold text-fg">Question bank</div>
+              {user.isAdmin && (
+                <Link href={L("/data-quality")} className="text-xs text-muted hover:text-accent">
+                  Exam Coverage & Quality →
+                </Link>
+              )}
             </div>
             <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm tabular-nums" data-testid="inventory-identity">
-              {inv.sources.map((src, idx) => (
-                <span key={src.id} className="contents">
-                  {idx > 0 && <span className="text-faint">+</span>}
-                  <Link href={L(`/sources/${src.id}`)} className="text-fg hover:text-accent">
-                    <span className="text-xl font-semibold">{src.occurrences}</span> <span className="text-xs text-muted">{src.name}</span>
-                  </Link>
-                </span>
-              ))}
-              {inv.sources.length > 1 && (
-                <>
-                  <span className="text-faint">−</span>
-                  <Link href={L("/common")} className="text-fg hover:text-accent">
-                    <span className="text-xl font-semibold">{inv.sourceOccurrences - inv.uniqueQuestions}</span> <span className="text-xs text-muted">overlap</span>
-                  </Link>
-                </>
-              )}
-              <span className="text-faint">=</span>
               <Link href={L("/questions")} className="text-accent">
-                <span className="text-xl font-semibold">{inv.uniqueQuestions}</span> <span className="text-xs">unique</span>
+                <span className="text-xl font-semibold">{inv.uniqueQuestions}</span> <span className="text-xs">unique questions</span>
               </Link>
-              {inv.identityHolds ? <CheckCircle2 className="size-4 self-center text-ok" aria-label="Identity holds" /> : <XCircle className="size-4 self-center text-bad" aria-label="Identity broken" />}
             </div>
             <div className="mt-3 flex flex-wrap gap-1.5 text-xs">
-              {inv.sources.length > 1 &&
-                inv.sources.map((src) => (
-                  <Badge key={src.id} tone="neutral">
-                    {src.only} {src.name} only
-                  </Badge>
-                ))}
               <Link href={L("/questions?verification=unverified")}>
                 <Badge tone="warn">{unverified} without a verified answer</Badge>
               </Link>

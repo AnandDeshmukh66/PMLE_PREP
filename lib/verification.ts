@@ -32,7 +32,7 @@ export const VERIFICATION_HELP: Record<Verification, string> = {
   verified: "Answer keys from two or more independent sources agree, and the community vote does not dispute them.",
   source_key: "Only one source provides a key, and nothing contradicts it.",
   user_verified: "You resolved this answer in the review queue.",
-  contested: "Keys agree, but the ExamTopics key dissents or the community vote is nearly tied. Feedback is provisional.",
+  contested: "Keys agree, but an original source key dissents or the community vote is nearly tied. Feedback is provisional.",
   conflict: "Sources publish different answers. Feedback is provisional until resolved.",
   unknown: "No source provides an answer.",
 };

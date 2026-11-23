@@ -13,7 +13,7 @@ export type CertInfo = {
   versionLabel: string | null;
   /** Domain number -> title of the published version's exam guide. */
   domains: Record<number, string>;
-  /** Question sources of the published version, in display order. */
+  /** Question sources of the published version, in display order. Administrators only; empty for learners. */
   sources: { id: string; name: string; kind: string; short: string }[];
 };
 

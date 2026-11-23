@@ -59,7 +59,7 @@ Layering inside the repository:
   1. **Autosave actions** (`lib/actions.ts` through the `sync()` wrapper) return an `Ack` (`{ok:true,...}` or `{ok:false, code}`) instead of throwing, so the client can tell "retry later" (thrown network/server error) from "never will succeed" (`INVALID`, `NOT_FOUND`) and "sign in again" (`UNAUTHENTICATED`). They are called only by the outbox.
   2. **Command actions** (admin and session creation) are called from event handlers with `callServer()` and return data or throw domain errors (`VersionError`, `IngestError`) converted to messages.
 - **Outbox.** Learner changes are placed in a per-user queue (`lib/sync-client.ts`): one in-flight request per record key, newer changes merged into the pending one, a client timestamp `rev` on every write, retry with exponential backoff (1 s doubling, capped at 30 s, jittered), persistence to `localStorage`, a 20-second send timeout (`SEND_TIMEOUT_MS`), cross-tab coordination through `BroadcastChannel("pmle-sync")`, and a pause while the session is expired. The server ignores writes with an older `rev` than stored (`clientUpdatedAt`), which makes retries and out-of-order delivery safe.
-- **Route handlers** are used where a server action does not fit: file download/upload (`/api/pdf`, `/api/ingest/upload`, backups, exports), JSON health.
+- **Route handlers** are used where a server action does not fit: file download/upload (`/api/pdf`, administrators only; `/api/exhibit`, exhibit images by question id and index for any signed-in user; `/api/ingest/upload`, backups, exports), JSON health.
 - **Request limits.** Proxy body size 26 MB (upload route), server-action body size 2 MB (`next.config.ts`).
 
 ## 3. Backend to database communication

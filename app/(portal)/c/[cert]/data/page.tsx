@@ -291,7 +291,7 @@ function DraftWorkspace({ draft, q, can, L, basedOn, expectedCurrentId }: { draf
           subtitle="Counts for this draft, computed from the stored questions."
           action={
             <Link href={L(`/data-quality?version=${draft.id}`)} className="text-xs text-accent hover:underline" data-testid="open-data-quality">
-              Open Data Quality dashboard →
+              Open Exam Coverage &amp; Quality →
             </Link>
           }
         />

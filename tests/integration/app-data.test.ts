@@ -82,27 +82,29 @@ describe("ingestion of the PMLE bank", () => {
 });
 
 describe("one shared question bank across views", () => {
-  it("syncs flags, answers and notes across All, Common, per-source and status views", async () => {
+  it("syncs flags, answers and notes across All Questions and the review lists", async () => {
     const q = await m.prisma.canonicalQuestion.findFirstOrThrow({ where: { versionId: V, active: true, isCommon: true, verification: "verified", multiSelect: false }, orderBy: { code: "asc" } });
     const key = JSON.parse(q.correctLabels!) as string[];
     const wrong = ["A", "B", "C", "D"].find((l) => !key.includes(l))!;
 
     ok(await m.actions.syncFlag({ questionId: q.id, kind: "flag", on: true, reason: "Suspected incorrect answer", rev: rev() }));
     ok(await m.actions.syncFlag({ questionId: q.id, kind: "review", on: true, rev: rev() }));
-    for (const scope of ["all", "common", "source:pdf", "source:examprepper", "flagged", "marked"] as const) {
+    ok(await m.actions.syncFlag({ questionId: q.id, kind: "bookmark", on: true, rev: rev() }));
+    for (const scope of ["all", "flagged", "marked", "bookmarked"] as const) {
       const r = (await rowsFor(scope)).find((x) => x.id === q.id);
       expect(r, scope).toBeDefined();
-      expect(r!.flagged && r!.marked, scope).toBe(true);
+      expect(r!.flagged && r!.marked && r!.bookmarked, scope).toBe(true);
     }
 
     const res = ok(await m.actions.submitAnswer({ clientId: cid(), questionId: q.id, selected: [wrong], mode: "browse" }));
     expect(res.outcome).toBe("incorrect");
     expect((await rowsFor("incorrect")).some((x) => x.id === q.id)).toBe(true);
-    expect((await rowsFor("source:pdf")).find((x) => x.id === q.id)!.stats.latestCorrect).toBe(false);
+    expect((await rowsFor("all")).find((x) => x.id === q.id)!.stats.latestCorrect).toBe(false);
 
     ok(await m.actions.submitAnswer({ clientId: cid(), questionId: q.id, selected: key, mode: "browse" }));
     expect((await rowsFor("incorrect")).some((x) => x.id === q.id)).toBe(false);
-    expect((await rowsFor("source:examprepper")).find((x) => x.id === q.id)!.stats.attempts).toBe(2);
+    expect((await rowsFor("all")).find((x) => x.id === q.id)!.stats.attempts).toBe(2);
+    ok(await m.actions.syncFlag({ questionId: q.id, kind: "bookmark", on: false, rev: rev() }));
 
     ok(await m.actions.saveNote({ clientId: cid(), questionId: q.id, content: "Remember: Dataflow for streaming", rev: rev() }));
     const detail = await m.questions.loadQuestionDetail(V, q.code, userId);
@@ -110,6 +112,28 @@ describe("one shared question bank across views", () => {
 
     ok(await m.actions.syncFlag({ questionId: q.id, kind: "flag", on: false, rev: rev() }));
     expect((await rowsFor("flagged")).some((x) => x.id === q.id)).toBe(false);
+  });
+
+  it("keeps source filters, sorts and search for administrators only", async () => {
+    const rows = await m.questions.loadQuestionRows(userId, V);
+    const all = m.questions.filterRows(rows, "all", {});
+    const epOnly = m.questions.filterRows(rows, "all", { source: "only:examprepper" }, { sourceSearch: true });
+    expect(epOnly.length).toBeGreaterThan(0);
+    expect(epOnly.length).toBeLessThan(all.length);
+    expect(epOnly.every((r) => r.sourceIds.length === 1 && r.sourceIds[0] === "examprepper")).toBe(true);
+    expect(m.questions.filterRows(rows, "all", { source: "common" }, { sourceSearch: true }).every((r) => r.isCommon)).toBe(true);
+    // Learners: the same parameters have no effect.
+    expect(m.questions.filterRows(rows, "all", { source: "only:examprepper" }).length).toBe(all.length);
+    expect(m.questions.filterRows(rows, "all", { sort: "qnum:examprepper" }).map((r) => r.code)).toEqual(all.map((r) => r.code));
+
+    const target = rows.find((r) => r.refs.some((x) => x.source === "examprepper" && x.qnum === 136))!;
+    expect(m.questions.filterRows(rows, "all", { q: "ep 136" }, { sourceSearch: true }).map((r) => r.id)).toEqual([target.id]);
+    expect(m.questions.filterRows(rows, "all", { q: "examprepper:136" }, { sourceSearch: true }).map((r) => r.id)).toContain(target.id);
+    expect(m.questions.filterRows(rows, "all", { q: "ep 136" }).map((r) => r.id)).not.toEqual([target.id]);
+    expect(m.questions.filterRows(rows, "all", { q: "examprepper" })).toHaveLength(0);
+    expect(m.questions.filterRows(rows, "all", { q: "pdf:84" })).toHaveLength(0);
+    // Canonical codes stay searchable for everyone.
+    expect(m.questions.filterRows(rows, "all", { q: target.code }).map((r) => r.id)).toEqual([target.id]);
   });
 
   it("persists theory progress per version", async () => {

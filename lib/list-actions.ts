@@ -5,8 +5,8 @@ import { z } from "zod";
 import { requireUser } from "./auth";
 import { publishedVersionId } from "./cert";
 import { prisma } from "./db";
-import { parseFilters, scopeFromParam, scopeMeta } from "./filters";
-import { filterRows, loadQuestionRows, versionSources } from "./questions";
+import { filtersToParams, learnerFilters, parseFilters, scopeFromParam, scopeMeta } from "./filters";
+import { filterRows, loadQuestionRows } from "./questions";
 import { getSettings } from "./settings";
 import { shuffleSeeded } from "./selection";
 
@@ -15,11 +15,10 @@ export async function createPracticeFromList(cert: string, scopeParam: string, q
   const user = await requireUser();
   const versionId = await publishedVersionId(z.string().min(3).max(40).regex(/^[a-z0-9-]+$/).parse(cert));
   const scope = scopeFromParam(String(scopeParam).slice(0, 40));
-  const q = String(query).slice(0, 2000);
-  const filters = parseFilters(new URLSearchParams(q));
+  const filters = learnerFilters(parseFilters(new URLSearchParams(String(query).slice(0, 2000))), user.isAdmin);
+  const q = filtersToParams(filters).toString();
   const settings = await getSettings(user.id);
-  const rows = filterRows(await loadQuestionRows(user.id, versionId), scope, filters);
-  const sources = await versionSources(versionId);
+  const rows = filterRows(await loadQuestionRows(user.id, versionId), scope, filters, { sourceSearch: user.isAdmin });
   if (!rows.length) return { id: null, note: "This list is empty." };
   const seed = Math.floor(Math.random() * 2 ** 31);
   const ordered = settings.shuffle ? shuffleSeeded(rows, seed) : rows;
@@ -31,7 +30,7 @@ export async function createPracticeFromList(cert: string, scopeParam: string, q
         versionId,
         kind: "practice",
         mode: "custom",
-        title: `${scopeMeta(scope, sources).title}${q ? " (filtered)" : ""}`,
+        title: `${scopeMeta(scope).title}${q ? " (filtered)" : ""}`,
         config: JSON.stringify({ mode: "custom", scope, query: q, seed, count: ids.length, immediateFeedback: settings.immediateFeedback }),
         immediateFeedback: settings.immediateFeedback,
       },

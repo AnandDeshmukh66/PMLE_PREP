@@ -25,8 +25,10 @@ export async function GET(req: Request) {
     prisma.canonicalQuestion.findMany({ where: { versionId, active: true }, include: { options: { orderBy: { order: "asc" } } } }),
   ]);
   const byId = new Map(details.map((d) => [d.id, d]));
+  const admin = user.isAdmin;
   const records = rows.map((r) => {
     const d = byId.get(r.id)!;
+    const provenance = admin ? { sources: r.refs.map((x) => x.key), sourcePage: r.refs.find((x) => x.page !== null)?.page ?? null, sourceUrl: r.refs.find((x) => x.url)?.url ?? null } : {};
     return {
       code: r.code,
       stem: r.stem,
@@ -41,9 +43,7 @@ export async function GET(req: Request) {
       subtopic: r.subtopic,
       alignmentScore: r.alignmentScore,
       legacyStatus: r.legacyStatus,
-      sources: r.refs.map((x) => x.key),
-      sourcePage: r.refs.find((x) => x.page !== null)?.page ?? null,
-      sourceUrl: r.refs.find((x) => x.url)?.url ?? null,
+      ...provenance,
       attempts: r.stats.attempts,
       latestCorrect: r.stats.latestCorrect,
       marked: r.marked,
@@ -55,11 +55,11 @@ export async function GET(req: Request) {
   if (format === "json") {
     return new Response(JSON.stringify(records, null, 2), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "content-disposition": `attachment; filename="${found.cert.slug}-${found.version.label}-questions-${date}.json"` } });
   }
-  const cols = ["code", "stem", "A", "B", "C", "D", "E", "F", "multiSelect", "verification", "correctLabels", "provisionalLabels", "domain", "objective", "topic", "subtopic", "alignmentScore", "legacyStatus", "sources", "sourcePage", "sourceUrl", "attempts", "latestCorrect", "marked", "flagged", "bookmarked"];
+  const cols = ["code", "stem", "A", "B", "C", "D", "E", "F", "multiSelect", "verification", "correctLabels", "provisionalLabels", "domain", "objective", "topic", "subtopic", "alignmentScore", "legacyStatus", ...(admin ? ["sources", "sourcePage", "sourceUrl"] : []), "attempts", "latestCorrect", "marked", "flagged", "bookmarked"];
   const lines = [cols.join(",")];
   for (const r of records) {
     const opt = Object.fromEntries(r.options.map((o) => [o.label, o.text]));
-    const row: Record<string, unknown> = { ...r, ...opt, correctLabels: r.correctLabels?.join("|") ?? "", provisionalLabels: r.provisionalLabels?.join("|") ?? "", sources: r.sources.join("|") };
+    const row: Record<string, unknown> = { ...r, ...opt, correctLabels: r.correctLabels?.join("|") ?? "", provisionalLabels: r.provisionalLabels?.join("|") ?? "", sources: r.sources?.join("|") ?? "" };
     lines.push(cols.map((c) => csvCell(row[c])).join(","));
   }
   return new Response("\uFEFF" + lines.join("\n"), { headers: { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store", "content-disposition": `attachment; filename="${found.cert.slug}-${found.version.label}-questions-${date}.csv"` } });

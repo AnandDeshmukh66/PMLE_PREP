@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils";
 
 const selectCls = "h-8 rounded-lg border border-line bg-surface-2 px-2 text-xs text-fg-2 outline-none hover:border-line-2 focus-visible:border-accent";
 
-export function FilterBar({ conceptName, hideSource }: { conceptName?: string | null; hideSource?: boolean }) {
+/** Source filter, source sorts and source search hints appear only when the certification context carries sources (administrators). */
+export function FilterBar({ conceptName }: { conceptName?: string | null }) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -45,7 +46,7 @@ export function FilterBar({ conceptName, hideSource }: { conceptName?: string | 
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={`Search stems, options, topics, Q-0042${sources.slice(0, 2).map((s) => `, ${s.id === "examprepper" ? "ep" : s.id} 12`).join("")}…`}
+            placeholder={`Search stems, options, topics, Q-0042${sources.slice(0, 2).map((s) => `, ${s.short.toLowerCase()} 12`).join("")}…`}
             className="h-9 w-full rounded-lg border border-line bg-surface-2 pr-3 pl-8 text-[13px] text-fg outline-none placeholder:text-faint focus-visible:border-accent"
             data-testid="search-input"
           />
@@ -72,7 +73,7 @@ export function FilterBar({ conceptName, hideSource }: { conceptName?: string | 
             </option>
           ))}
         </select>
-        {!hideSource && sources.length > 1 && (
+        {sources.length > 1 && (
           <select aria-label="Source" className={selectCls} value={sp.get("source") ?? ""} onChange={(e) => set("source", e.target.value || null)}>
             <option value="">Any source</option>
             <option value="common">In two or more sources</option>

@@ -6,6 +6,7 @@ import { Bookmark, ChevronLeft, ChevronRight, Clock, Send } from "lucide-react";
 import { submitMock } from "@/lib/actions";
 import { enqueue, flush, pendingEntries, useAfterMount, useSyncStatus } from "@/lib/sync-client";
 import { cn, fmtClock } from "@/lib/utils";
+import type { CardImage } from "@/lib/exhibits";
 import { StemText } from "./question-card";
 import { Button, Card, Kbd } from "./ui";
 
@@ -16,7 +17,7 @@ export type MockQuestion = {
   multiSelect: boolean;
   selectCount: number;
   options: { label: string; text: string }[];
-  images: { remote: string; local: string | null }[];
+  images: CardImage[];
   domain: number | null;
   selected: string[];
   marked: boolean;

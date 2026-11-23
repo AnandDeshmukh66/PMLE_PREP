@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import type { PrismaClient } from "@prisma/client";
+import { resolveExhibitPath, type StoredImage } from "./exhibits";
 import { computeInventory } from "./inventory";
 import { parseJson } from "./json";
 import { isManuallyEdited } from "./question-edit";
@@ -48,6 +50,14 @@ export type SourceRow = {
   shared: number;
   openErrors: number;
   openWarnings: number;
+  /** Distinct active canonical questions with a live occurrence from this source. */
+  questions: number;
+  /** Of those questions: answer verified (by keys or a reviewer), in conflict or contested, and per legacy status. */
+  verified: number;
+  conflicts: number;
+  legacyName: number;
+  deprecated: number;
+  needsVerification: number;
 };
 
 export type DraftQuality = Awaited<ReturnType<typeof loadDraftQuality>>;
@@ -72,7 +82,7 @@ function stateOf(job: JobInfo | null, now: Date): string {
   return "processed";
 }
 
-/** Everything the Data Settings and Data Quality pages show about one draft, computed from the stored rows. */
+/** Everything the Data Settings and Exam Coverage & Quality pages show about one draft, computed from the stored rows. */
 export async function loadDraftQuality(db: PrismaClient, versionId: string) {
   const now = new Date();
   const [inventory, readiness, sources, jobs, occs, issues, dupGroups, canonical] = await Promise.all([
@@ -84,10 +94,10 @@ export async function loadDraftQuality(db: PrismaClient, versionId: string) {
       orderBy: { createdAt: "desc" },
       select: { id: true, status: true, kind: true, sourceKey: true, sourceName: true, sourceUrl: true, attempts: true, maxAttempts: true, errorCode: true, error: true, warnings: true, stages: true, extractedCount: true, validCount: true, duplicateCount: true, lowConfidenceCount: true, createdAt: true, startedAt: true, finishedAt: true, nextRunAt: true, createdBy: true, file: { select: { fileName: true, byteSize: true } } },
     }),
-    db.sourceOccurrence.findMany({ where: { versionId }, select: { sourceId: true, sourceKey: true, stem: true, options: true, issues: true, excluded: true, extractionMethod: true, rawJson: true, canonicalId: true } }),
+    db.sourceOccurrence.findMany({ where: { versionId }, select: { id: true, sourceId: true, sourceQnum: true, sourceKey: true, stem: true, options: true, issues: true, excluded: true, extractionMethod: true, rawJson: true, canonicalId: true, images: true } }),
     db.importIssue.findMany({ where: { versionId, active: true, status: "open" }, select: { kind: true, severity: true, sourceKey: true } }),
     db.duplicateCandidate.groupBy({ by: ["status"], where: { versionId }, _count: true }),
-    db.canonicalQuestion.findMany({ where: { versionId, active: true }, select: { id: true, correctLabels: true, objectiveCode: true, verification: true } }),
+    db.canonicalQuestion.findMany({ where: { versionId, active: true }, select: { id: true, correctLabels: true, objectiveCode: true, verification: true, legacyStatus: true, hasImages: true, primaryOccurrenceId: true } }),
   ]);
 
   const sourcesOf = new Map<number, Set<string>>();
@@ -96,6 +106,7 @@ export async function loadDraftQuality(db: PrismaClient, versionId: string) {
   const rows = new Map<string, SourceRow>();
   const blank = (key: string, name: string, kind: string, url: string | null, fileName: string | null, fileSize: number | null): SourceRow => ({
     key, name, kind, url, fileName, fileSize, state: "copied", job: null, history: [], extracted: 0, valid: 0, invalid: 0, excluded: 0, edited: 0, lowConfidence: 0, shared: 0, openErrors: 0, openWarnings: 0,
+    questions: 0, verified: 0, conflicts: 0, legacyName: 0, deprecated: 0, needsVerification: 0,
   });
   for (const s of sources) rows.set(s.id, blank(s.id, s.name, s.kind, s.url, s.fileName, null));
   for (const j of jobs) {
@@ -124,6 +135,19 @@ export async function loadDraftQuality(db: PrismaClient, versionId: string) {
     if (LOW_CONFIDENCE_METHODS.has(o.extractionMethod)) row.lowConfidence++;
     if (o.canonicalId && (sourcesOf.get(o.canonicalId)?.size ?? 0) > 1) row.shared++;
   }
+  const byId = new Map(canonical.map((c) => [c.id, c]));
+  for (const row of rows.values()) {
+    const ids = new Set(occs.filter((o) => o.sourceId === row.key && !o.excluded && o.canonicalId && byId.has(o.canonicalId)).map((o) => o.canonicalId!));
+    for (const id of ids) {
+      const c = byId.get(id)!;
+      row.questions++;
+      if (c.verification === "verified" || c.verification === "user_verified") row.verified++;
+      if (c.verification === "conflict" || c.verification === "contested") row.conflicts++;
+      if (c.legacyStatus === "renamed_service") row.legacyName++;
+      if (c.legacyStatus === "deprecated_feature") row.deprecated++;
+      if (c.legacyStatus === "possibly_outdated") row.needsVerification++;
+    }
+  }
   const kinds = new Map<string, { kind: string; severity: string; count: number }>();
   const severity = { error: 0, warning: 0, info: 0 } as Record<string, number>;
   for (const i of issues) {
@@ -139,6 +163,7 @@ export async function loadDraftQuality(db: PrismaClient, versionId: string) {
   const valid = live.filter(isValidOccurrence).length;
   const mapped = canonical.filter((c) => c.objectiveCode).length;
   const gradable = canonical.filter((c) => c.correctLabels).length;
+  const exhibits = exhibitGaps(canonical, live);
 
   return {
     sources: [...rows.values()],
@@ -147,9 +172,29 @@ export async function loadDraftQuality(db: PrismaClient, versionId: string) {
     extracted: { total: live.length, valid, invalid: live.length - valid, excluded: occs.length - live.length, edited: live.filter(isManuallyEdited).length, lowConfidence: live.filter((o) => LOW_CONFIDENCE_METHODS.has(o.extractionMethod)).length },
     duplicates: { merged: (dup.auto_confirmed ?? 0) + (dup.approved ?? 0), approved: dup.approved ?? 0, pending: dup.pending ?? 0, rejected: (dup.auto_rejected ?? 0) + (dup.rejected ?? 0) },
     issues: { error: severity.error ?? 0, warning: severity.warning ?? 0, info: severity.info ?? 0, kinds: [...kinds.values()].sort((a, b) => (a.severity === b.severity ? b.count - a.count : a.severity === "error" ? -1 : b.severity === "error" ? 1 : a.severity === "warning" ? -1 : 1)) },
+    exhibits,
     readiness,
     inventory,
   };
+}
+
+/** Exhibits of the questions as learners see them (primary occurrence), and how many have no usable local copy. */
+function exhibitGaps(canonical: { id: number; hasImages: boolean; primaryOccurrenceId: number | null }[], live: { id: number; canonicalId: number | null; sourceId: string; sourceQnum: number; images: string }[]) {
+  const occsOf = new Map<number, typeof live>();
+  for (const o of live) if (o.canonicalId) (occsOf.get(o.canonicalId) ?? occsOf.set(o.canonicalId, []).get(o.canonicalId)!).push(o);
+  let total = 0;
+  let missing = 0;
+  for (const c of canonical) {
+    if (!c.hasImages) continue;
+    const os = (occsOf.get(c.id) ?? []).sort((a, b) => (a.sourceId === b.sourceId ? a.sourceQnum - b.sourceQnum : a.sourceId < b.sourceId ? 1 : -1));
+    const primary = os.find((o) => o.id === c.primaryOccurrenceId) ?? os[0];
+    for (const img of primary ? parseJson<StoredImage[]>(primary.images, []) : []) {
+      total++;
+      const file = resolveExhibitPath(img?.local);
+      if (!file || !fs.existsSync(file)) missing++;
+    }
+  }
+  return { total, missing };
 }
 
 export type StepState = "done" | "current" | "todo" | "blocked";

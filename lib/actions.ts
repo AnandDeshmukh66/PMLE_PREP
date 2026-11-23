@@ -14,7 +14,7 @@ import { parseJson, sortedLabels } from "./json";
 import { submitMockSession } from "./mock";
 import { loadQuestionRows } from "./questions";
 import { refreshReviewQueue } from "./review-queue";
-import { selectMock, selectPractice, type PracticeConfig, PRACTICE_MODES } from "./selection";
+import { LEARNER_HIDDEN_MODES, selectMock, selectPractice, type PracticeConfig, PRACTICE_MODES } from "./selection";
 import { getSettings, SETTINGS_SCHEMA, type Settings } from "./settings";
 import { isGradable } from "./verification";
 import { assertEditable, refreshVersionStats } from "./versions";
@@ -340,6 +340,7 @@ export async function createPracticeSession(cert: string, input: PracticeConfig)
   const user = await requireUser();
   const versionId = await publishedVersionId(CertSlug.parse(cert));
   const cfg = PracticeInput.parse(input);
+  if (!user.isAdmin && LEARNER_HIDDEN_MODES.includes(cfg.mode)) cfg.mode = "all";
   const rows = await loadQuestionRows(user.id, versionId);
   const seed = cfg.seed ?? Math.floor(Math.random() * 2 ** 31);
   const { ids, note, poolSize } = selectPractice(rows, { ...cfg, seed });

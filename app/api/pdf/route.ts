@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic";
 const pdf = (body: Uint8Array, name: string) =>
   new Response(new Uint8Array(body), { headers: { "content-type": "application/pdf", "content-disposition": `inline; filename="${name.replace(/[^\w.-]/g, "_")}"`, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" } });
 
-/** A PDF question source of a content version (?v=<versionId>&s=<sourceId>); without parameters, the PMLE 2026 PDF. */
+/** A PDF question source of a content version (?v=<versionId>&s=<sourceId>); without parameters, the PMLE 2026 PDF. Administrators only. */
 export async function GET(req: Request) {
   const user = await apiUser();
   if (user instanceof Response) return user;
+  if (!user.isAdmin) return new Response("Source not found.", { status: 404 });
   const sp = new URL(req.url).searchParams;
   const versionId = sp.get("v") || LEGACY_PMLE_VERSION_ID;
   const sourceId = sp.get("s") || "pdf";

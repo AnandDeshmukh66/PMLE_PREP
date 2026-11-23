@@ -13,7 +13,6 @@ import {
   Flag,
   GraduationCap,
   LayoutDashboard,
-  Layers,
   ListChecks,
   Map,
   Menu,
@@ -21,8 +20,6 @@ import {
   Timer,
   X,
   XCircle,
-  Files,
-  Globe,
   Library,
   Eye,
   LayoutGrid,
@@ -32,13 +29,12 @@ import {
 import { SaveIndicator } from "@/components/sync-provider";
 import { cn } from "@/lib/utils";
 
-export type SidebarCounts = { all: number; common: number; marked: number; flagged: number; incorrect: number; bookmarked: number; issues: number; daysLeft: number | null };
-export type SidebarSource = { id: string; name: string; kind: string; count: number };
+export type SidebarCounts = { all: number; marked: number; flagged: number; incorrect: number; bookmarked: number; issues: number; daysLeft: number | null };
 export type SidebarCert = { slug: string; code: string; name: string; versionLabel: string | null; published: boolean };
 
 type Item = { href: string; label: string; icon: typeof Library; count?: number; badge?: string; exact?: boolean };
 
-function certGroups(base: string, c: SidebarCounts, sources: SidebarSource[], showData: boolean, published: boolean): { label: string | null; items: Item[] }[] {
+function certGroups(base: string, c: SidebarCounts, showData: boolean, published: boolean): { label: string | null; items: Item[] }[] {
   const study = published
     ? [
         {
@@ -51,16 +47,9 @@ function certGroups(base: string, c: SidebarCounts, sources: SidebarSource[], sh
           ],
         },
         {
-          label: "Question bank",
+          label: "Questions & Review",
           items: [
             { href: `${base}/questions`, label: "All Questions", icon: Library, count: c.all },
-            ...(sources.length > 1 ? [{ href: `${base}/common`, label: "Common Questions", icon: Layers, count: c.common }] : []),
-            ...sources.map((s) => ({ href: `${base}/sources/${s.id}`, label: `${s.name} Questions`, icon: s.kind === "website" ? Globe : Files, count: s.count })),
-          ],
-        },
-        {
-          label: "Review",
-          items: [
             { href: `${base}/review`, label: "Marked for Review", icon: Eye, count: c.marked },
             { href: `${base}/flagged`, label: "Flagged Questions", icon: Flag, count: c.flagged },
             { href: `${base}/incorrect`, label: "Incorrect Questions", icon: XCircle, count: c.incorrect },
@@ -83,7 +72,7 @@ function certGroups(base: string, c: SidebarCounts, sources: SidebarSource[], sh
     {
       label: "Content",
       items: [
-        ...(published ? [{ href: `${base}/data-quality`, label: "Data Quality", icon: Database, count: c.issues }] : []),
+        ...(showData && published ? [{ href: `${base}/data-quality`, label: "Exam Coverage & Quality", icon: Database, count: c.issues }] : []),
         ...(showData ? [{ href: `${base}/data`, label: "Data Settings", icon: SlidersHorizontal }] : []),
       ],
     },
@@ -113,11 +102,11 @@ function isActive(path: string, it: Item) {
 }
 
 /** Navigation for one certification (cert set) or for the certification home and global pages (cert null). */
-export function Sidebar({ email, cert = null, counts, sources = [], showData = false }: { email: string; cert?: SidebarCert | null; counts?: SidebarCounts; sources?: SidebarSource[]; showData?: boolean }) {
+export function Sidebar({ email, cert = null, counts, showData = false }: { email: string; cert?: SidebarCert | null; counts?: SidebarCounts; showData?: boolean }) {
   const path = usePathname();
   const [open, setOpen] = useState(false);
   const base = cert ? `/c/${cert.slug}` : "/";
-  const groups = cert && counts ? certGroups(base, counts, sources, showData, cert.published) : homeGroups;
+  const groups = cert && counts ? certGroups(base, counts, showData, cert.published) : homeGroups;
   const nav = (
     <nav aria-label="Main" className="flex flex-col gap-5 px-3 pb-6">
       {groups.map((g, gi) => (

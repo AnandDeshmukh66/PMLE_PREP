@@ -5,6 +5,7 @@ import { MockRunner, type MockQuestion } from "@/components/mock-runner";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, ProgressBar, Stat } from "@/components/ui";
 import type { AllocationPlan } from "@/lib/allocation";
 import { prisma } from "@/lib/db";
+import { learnerImages, type StoredImage } from "@/lib/exhibits";
 import { parseJson } from "@/lib/json";
 import { submitMockSession, type MockResults } from "@/lib/mock";
 import { getSettings } from "@/lib/settings";
@@ -21,7 +22,7 @@ async function loadSession(id: string, userId: string) {
         orderBy: { order: "asc" },
         include: {
           question: {
-            include: { options: { orderBy: { order: "asc" } }, occurrences: { select: { id: true, images: true } } },
+            include: { options: { orderBy: { order: "asc" } }, occurrences: { where: { excluded: false }, orderBy: [{ sourceId: "desc" }, { sourceQnum: "asc" }], select: { id: true, images: true } } },
           },
         },
       },
@@ -47,6 +48,7 @@ export default async function MockSessionPage({ params }: { params: Promise<{ ce
     const questions: MockQuestion[] = session.questions.map((sq) => {
       const q = sq.question;
       const primary = q.occurrences.find((o) => o.id === q.primaryOccurrenceId) ?? q.occurrences[0];
+      const images = primary ? parseJson<StoredImage[]>(primary.images, []) : [];
       return {
         id: q.id,
         code: q.code,
@@ -54,7 +56,7 @@ export default async function MockSessionPage({ params }: { params: Promise<{ ce
         multiSelect: q.multiSelect,
         selectCount: q.selectCount,
         options: q.options.map((o) => ({ label: o.label, text: o.text })),
-        images: primary ? parseJson(primary.images, []) : [],
+        images: user.isAdmin ? images : learnerImages(q.id, images),
         domain: q.domainNumber,
         selected: parseJson<string[]>(sq.selectedLabels, []),
         marked: sq.markedInSession,

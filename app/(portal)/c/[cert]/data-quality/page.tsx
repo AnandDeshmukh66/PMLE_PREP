@@ -6,14 +6,18 @@ import { AnswerResolver, ClassificationPicker, DuplicateButtons, IssueButtons } 
 import { ExcludeToggle, QuestionEditor } from "@/components/question-editor";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat } from "@/components/ui";
 import { certAdminPage } from "@/lib/cert";
-import { inCert, isEditableStatus, VERSION_STATUS_LABEL, type VersionStatus } from "@/lib/cert-rules";
+import { inCert, isEditableStatus, neutralSourceLabels, VERSION_STATUS_LABEL, type VersionStatus } from "@/lib/cert-rules";
 import { prisma } from "@/lib/db";
-import { LEGACY_FLAGGED, LEGACY_LABEL, type SourceInfo } from "@/lib/filters";
+import { LEGACY_FLAGGED, type SourceInfo } from "@/lib/filters";
 import { parseJson } from "@/lib/json";
+import { BlueprintShare } from "@/components/blueprint-share";
+import { DistributionCard } from "@/components/distribution-card";
+import { blueprintDistribution, type Distribution, parseVerifiedWeights, PROPORTIONAL_PP, verificationState } from "@/lib/blueprint";
+import { computeInventory } from "@/lib/inventory";
 import { type DraftQuality, isValidOccurrence, loadDraftQuality } from "@/lib/quality";
 import { manualEditOf } from "@/lib/question-edit";
 import { ISSUE_TEXT, LOW_CONFIDENCE_METHODS } from "@/lib/review-queue";
-import { cn, relTime } from "@/lib/utils";
+import { cn, domainColor, pct, relTime } from "@/lib/utils";
 
 type SP = Record<string, string | string[] | undefined>;
 const TABS = [
@@ -28,7 +32,7 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
-type Ctx = { vid: string; canEdit: boolean; tabHref: (query: string) => string; qHref: (code: string) => string | null; sources: SourceInfo[] };
+type Ctx = { vid: string; canEdit: boolean; tabHref: (query: string) => string; qHref: (code: string) => string | null; dataHref: string; sources: SourceInfo[] };
 
 function QCode({ ctx, code, className }: { ctx: Ctx; code: string; className?: string }) {
   const href = ctx.qHref(code);
@@ -41,26 +45,25 @@ function QCode({ ctx, code, className }: { ctx: Ctx; code: string; className?: s
   );
 }
 
-/** Quality review of one content version: the published one (read-only), or a draft (?version=) for administrators. */
+/** Exam Coverage & Quality (administrators only): the published version read-only, or a draft (?version=). */
 export default async function DataQualityPage({ params, searchParams }: { params: Promise<{ cert: string }>; searchParams: Promise<SP> }) {
   const sp = await searchParams;
   const { user, cert, base, version: published } = await certAdminPage(params);
+  if (!user.isAdmin) notFound();
   const L = (h: string) => inCert(base, h);
   const requested = typeof sp.version === "string" ? sp.version : null;
   const fields = { id: true, label: true, status: true, publishedAt: true, publishedBy: true, guideTitle: true, questionCount: true, objectiveCount: true } as const;
   let v = published;
   if (requested && requested !== published?.id) {
-    if (!user.isAdmin) notFound();
     v = await prisma.contentVersion.findFirst({ where: { id: requested, certificationId: cert.id }, select: fields });
-  } else if (!v && user.isAdmin) {
+  } else if (!v) {
     v = await prisma.contentVersion.findFirst({ where: { certificationId: cert.id, status: { in: ["draft", "review"] } }, orderBy: { createdAt: "desc" }, select: fields });
   }
   if (!v) notFound();
   const editable = isEditableStatus(v.status);
   const vq = v.id === published?.id ? "" : `&version=${encodeURIComponent(v.id)}`;
   const sources = await prisma.questionSource.findMany({ where: { versionId: v.id }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] });
-  const ctx: Ctx = { vid: v.id, canEdit: user.canManageContent && editable, tabHref: (q) => L(`/data-quality?${q}${vq}`), qHref: (code) => (vq ? null : L(`/questions/${code}`)), sources };
-  const admin = user.isAdmin;
+  const ctx: Ctx = { vid: v.id, canEdit: user.canManageContent && editable, tabHref: (q) => L(`/data-quality?${q}${vq}`), qHref: (code) => (vq ? null : L(`/questions/${code}`)), dataHref: L("/data"), sources };
   const tab = (TABS.find((t) => t.id === sp.tab)?.id ?? "overview") as Tab;
   const vw = { versionId: v.id };
   const counts = {
@@ -74,24 +77,16 @@ export default async function DataQualityPage({ params, searchParams }: { params
   return (
     <div className="animate-in">
       <PageHeader
-        title="Data Quality"
-        description={`${cert.code} ${v.label} (${VERSION_STATUS_LABEL[v.status as VersionStatus] ?? v.status}). Extraction results, deduplication decisions, answer verification and the manual review queue.`}
+        title="Exam Coverage & Quality"
+        description={`${cert.code} ${v.label} (${VERSION_STATUS_LABEL[v.status as VersionStatus] ?? v.status}). How the bank covers the official exam guide, extraction results, deduplication decisions, answer verification and the manual review queue.`}
       />
       {!editable ? (
         <div className="mb-5 rounded-lg border border-line bg-surface-2 px-4 py-2.5 text-[12.5px] text-muted" data-testid="dq-readonly">
-          Read-only view of a {v.status} version. Published content never changes, so learners&apos; progress always refers to exactly what they studied.
-          {admin ? (
-            <>
-              {" "}
-              To correct something, create a draft in{" "}
-              <Link href={L("/data")} className="text-accent hover:underline">
-                Data Settings
-              </Link>
-              , review it there and publish it.
-            </>
-          ) : (
-            " Administrators correct content in a new draft version."
-          )}
+          Read-only view of a {v.status} version. Published content never changes, so learners&apos; progress always refers to exactly what they studied. To correct something, create a draft in{" "}
+          <Link href={L("/data")} className="text-accent hover:underline">
+            Data Settings
+          </Link>
+          , review it there and publish it.
         </div>
       ) : !ctx.canEdit ? (
         <div className="mb-5 rounded-lg border border-warn/30 bg-warn-soft px-4 py-2.5 text-[12.5px] text-warn" data-testid="dq-elevate">
@@ -106,7 +101,7 @@ export default async function DataQualityPage({ params, searchParams }: { params
           .
         </div>
       )}
-      <nav className="mb-5 flex gap-1 overflow-x-auto border-b border-line" aria-label="Data quality sections">
+      <nav className="mb-5 flex gap-1 overflow-x-auto border-b border-line" aria-label="Exam coverage and quality sections">
         {TABS.map((t) => (
           <Link key={t.id} href={ctx.tabHref(`tab=${t.id}`)} className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t.id ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg-2")} data-testid={`dq-tab-${t.id}`}>
             {t.label}
@@ -131,59 +126,127 @@ type RunSummary = { final?: { uniqueQuestions: number; confirmedOverlap: number;
 const fmtValue = (v: unknown) => (Array.isArray(v) ? (v.length ? v.slice(0, 20).join(", ") : "none") : typeof v === "object" && v !== null ? JSON.stringify(v).slice(0, 80) : String(v));
 
 async function Overview({ ctx }: { ctx: Ctx }) {
-  const [quality, run, sourceRows] = await Promise.all([
+  const [quality, domains, objectives, objectiveCounts, version] = await Promise.all([
     loadDraftQuality(prisma, ctx.vid),
-    prisma.importRun.findFirst({ where: { versionId: ctx.vid, status: { in: ["succeeded", "completed"] } }, orderBy: { id: "desc" } }),
-    prisma.questionSource.findMany({ where: { versionId: ctx.vid }, orderBy: [{ kind: "asc" }, { id: "asc" }] }),
+    prisma.examDomain.findMany({ where: { versionId: ctx.vid }, orderBy: { number: "asc" }, select: { number: true, title: true, weightPercent: true } }),
+    prisma.examObjective.findMany({ where: { versionId: ctx.vid }, orderBy: [{ domainNumber: "asc" }, { order: "asc" }], select: { code: true } }),
+    prisma.canonicalQuestion.groupBy({ by: ["objectiveCode"], where: { versionId: ctx.vid, active: true }, _count: true }),
+    prisma.contentVersion.findUnique({ where: { id: ctx.vid }, select: { guideTitle: true, label: true } }),
   ]);
   const inv = quality.inventory;
-  const report = parseJson<RunSummary>(run?.summary ?? "{}", {});
+  const dist = blueprintDistribution(domains, inv.byDomain);
+  const state = verificationState(ctx.vid, domains, parseVerifiedWeights(process.env.BLUEPRINT_VERIFIED_WEIGHTS));
+  const covered = new Set(objectiveCounts.filter((o) => o._count > 0).map((o) => o.objectiveCode));
+  const empty = objectives.filter((o) => !covered.has(o.code)).map((o) => o.code);
+  const guide = version?.guideTitle ?? `version ${version?.label ?? ""}`;
   return (
-    <div className="flex flex-col gap-5">
-      <QualitySummary q={quality} ctx={ctx} />
-      <Card className="p-5">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-fg">
-          {inv.identityHolds ? <CheckCircle2 className="size-4 text-ok" /> : <XCircle className="size-4 text-bad" />}
-          Unique = {inv.sources.map((x) => x.name).join(" + ") || "sources"} − overlap: {inv.sources.map((x) => x.occurrences).join(" + ") || 0} − {inv.sourceOccurrences - inv.uniqueQuestions} = {inv.uniqueQuestions}
-          <span className="text-muted">({inv.uniqueQuestions} canonical questions in this version)</span>
-        </div>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8" data-testid="inventory">
-          <Stat label="PDF source questions" value={inv.pdfSourceQuestions} />
-          <Stat label="Website source questions" value={inv.websiteSourceQuestions} />
-          <Stat label="Confirmed overlap" value={inv.confirmedOverlap} />
-          <Stat label="Unique total" value={inv.uniqueQuestions} tone="accent" />
-          <Stat label="PDF only" value={inv.pdfOnly} />
-          <Stat label="Website only" value={inv.websiteOnly} />
-          <Stat label="Same-source merges" value={inv.intraSourceMerged} />
-          <Stat label="Open review items" value={inv.openReviewItems} tone={inv.openReviewItems ? "warn" : "ok"} />
-        </div>
-      </Card>
-      <div className="grid gap-5 lg:grid-cols-2">
-        {sourceRows.map((src) => {
-          const rep = report.sources?.[src.id] ?? {};
-          const facts: [string, unknown][] = [
-            ["Kind", src.kind],
-            ["Declared / extracted", `${src.declaredCount ?? "?"} / ${inv.sources.find((x) => x.id === src.id)?.occurrences ?? src.extractedCount}`],
-            ...Object.entries(rep).filter(([k, val]) => !["file", "url", "access_notes"].includes(k) && (typeof val !== "object" || Array.isArray(val))),
-          ];
-          return (
-            <Card key={src.id}>
-              <CardHeader title={`${src.name} extraction`} subtitle={src.url ?? src.fileName ?? undefined} />
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-2 px-5 pb-5 text-xs">
-                {facts.map(([k, val]) => (
-                  <div key={k} className="flex justify-between gap-3 border-b border-line/50 py-1">
-                    <dt className="text-muted">{k.replaceAll("_", " ")}</dt>
-                    <dd className="text-right text-fg-2 tabular-nums">{fmtValue(val)}</dd>
-                  </div>
-                ))}
-              </dl>
-              {typeof rep.access_notes === "string" && <p className="px-5 pb-5 text-[11px] text-faint">{rep.access_notes}</p>}
-            </Card>
-          );
-        })}
-        <Card>
-          <CardHeader title="Answer verification" subtitle="Only verified, single-source and user-resolved answers are graded" />
-          <div className="space-y-1.5 px-5 pb-5 text-xs">
+    <div className="flex flex-col gap-5" data-testid="coverage-overview">
+      <DistributionCard dist={dist} state={state} />
+      {dist.rows.length > 0 && (
+        <BlueprintShare
+          dist={dist}
+          linkDomains={false}
+          note={
+            <span data-testid="scaling-note">
+              Official weights from {guide}, shown as published. The published values total {dist.weightSum}%; for the comparison and the score each is scaled proportionally (weight ÷ {dist.weightSum}).
+            </span>
+          }
+        />
+      )}
+      <DomainTable dist={dist} empty={empty} ctx={ctx} />
+      <QuestionQuality q={quality} ctx={ctx} />
+      <SourcesTable q={quality} ctx={ctx} />
+    </div>
+  );
+}
+
+const fmtPp = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1)} pp`;
+
+const DIST_STATUS: Record<string, [string, "ok" | "accent" | "warn"]> = { proportional: ["Proportional", "ok"], over: ["Over", "accent"], under: ["Under", "warn"] };
+
+function DomainTable({ dist, empty, ctx }: { dist: Distribution; empty: string[]; ctx: Ctx }) {
+  if (!dist.rows.length) return null;
+  return (
+    <Card data-testid="domain-coverage">
+      <CardHeader title="Domain coverage" subtitle={`Difference is the bank share minus the scaled official weight; within ±${PROPORTIONAL_PP} pp counts as proportional.`} />
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-[11px] text-faint">
+            <tr>
+              <th className="px-5 py-2 font-medium">Domain</th>
+              <th className="px-2 py-2 text-right font-medium">Official weight</th>
+              <th className="px-2 py-2 text-right font-medium">Bank share</th>
+              <th className="px-2 py-2 text-right font-medium">Questions</th>
+              <th className="px-2 py-2 text-right font-medium">Difference</th>
+              <th className="px-5 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {dist.rows.map((r) => {
+              const [label, tone] = r.status ? DIST_STATUS[r.status] : ["n/a", "warn" as const];
+              return (
+                <tr key={r.number} data-testid={`domain-row-${r.number}`}>
+                  <td className="px-5 py-2">
+                    <span className="flex items-center gap-2 text-fg-2">
+                      <span className="size-2 shrink-0 rounded-full" style={{ background: domainColor(r.number) }} />
+                      {r.number}. {r.title}
+                    </span>
+                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums" data-testid="published-weight">
+                    {r.publishedWeight === null ? "n/a" : `${r.publishedWeight}%`}
+                  </td>
+                  <td className="px-2 py-2 text-right tabular-nums">{pct(r.share, 1)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{r.count}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{r.diffPp === null ? "n/a" : fmtPp(r.diffPp)}</td>
+                  <td className="px-5 py-2">
+                    <Badge tone={tone}>{label}</Badge>
+                  </td>
+                </tr>
+              );
+            })}
+            {dist.unmapped > 0 && (
+              <tr className="text-muted">
+                <td className="px-5 py-2">Unmapped</td>
+                <td className="px-2 py-2 text-right">-</td>
+                <td className="px-2 py-2 text-right tabular-nums">{pct(dist.unmappedShare, 1)}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{dist.unmapped}</td>
+                <td className="px-2 py-2 text-right" />
+                <td className="px-5 py-2" />
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {empty.length > 0 && (
+        <p className="border-t border-line px-5 py-2.5 text-xs text-muted">
+          Objectives with no questions:{" "}
+          <Link href={ctx.tabHref("tab=classification")} className="text-accent hover:underline">
+            {empty.join(", ")}
+          </Link>
+        </p>
+      )}
+    </Card>
+  );
+}
+
+function QuestionQuality({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
+  const inv = q.inventory;
+  const legacy = ["renamed_service", "deprecated_feature", "possibly_outdated", "verified_obsolete"] as const;
+  return (
+    <Card data-testid="question-quality">
+      <CardHeader title="Question quality" subtitle="Content checks of the unique questions. Independent of the distribution above." />
+      <div className="grid grid-cols-2 gap-4 px-5 pb-4 md:grid-cols-5">
+        <Stat label="Total questions" value={inv.uniqueQuestions} tone="accent" />
+        <Stat label="Found in 2+ sources" value={inv.confirmedOverlap} hint={`merged duplicates: ${q.duplicates.merged} · decisions pending: ${q.duplicates.pending}`} />
+        <Stat label="Answer conflicts" value={q.questions.conflicts} tone={q.questions.conflicts ? "warn" : "ok"} />
+        <Stat label="Open review items" value={inv.openReviewItems} tone={inv.openReviewItems ? "warn" : "ok"} />
+        <Stat label="Exhibits without a local copy" value={q.exhibits.missing} tone={q.exhibits.missing ? "warn" : "ok"} hint={`of ${q.exhibits.total} exhibits`} />
+      </div>
+      <QualitySummary q={q} ctx={ctx} />
+      <div className="grid gap-5 border-t border-line px-5 py-4 md:grid-cols-2">
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-fg-2">Answer verification</div>
+          <div className="space-y-1.5 text-xs">
             {Object.entries(inv.byVerification)
               .sort((a, b) => b[1] - a[1])
               .map(([k, v]) => (
@@ -193,26 +256,91 @@ async function Overview({ ctx }: { ctx: Ctx }) {
                 </div>
               ))}
           </div>
-        </Card>
-        <Card>
-          <CardHeader title="Currency against the exam guide" />
-          <div className="space-y-1.5 px-5 pb-5 text-xs">
-            {Object.entries(inv.byLegacy)
-              .sort((a, b) => b[1] - a[1])
-              .map(([k, v]) => (
-                <div key={k} className="flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    <LegacyBadge status={k} />
-                    {k === "current" || k === "renamed_terminology" ? <span className="text-muted">{LEGACY_LABEL[k]}</span> : null}
-                  </span>
-                  <span className="text-fg-2 tabular-nums">{v}</span>
-                </div>
-              ))}
-            <p className="pt-2 text-[11px] text-faint">&quot;Renamed terms&quot; only uses an older product name (for example Vertex AI, now Gemini Enterprise Agent Platform) and is not flagged as outdated.</p>
+        </div>
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-fg-2">Currency against the exam guide</div>
+          <div className="space-y-1.5 text-xs">
+            {legacy.map((k) => (
+              <div key={k} className="flex items-center justify-between">
+                <Link href={ctx.tabHref("tab=legacy")} className="hover:text-accent">
+                  <LegacyBadge status={k} />
+                </Link>
+                <span className="text-fg-2 tabular-nums">{inv.byLegacy[k] ?? 0}</span>
+              </div>
+            ))}
+            <p className="pt-1 text-[11px] text-faint">
+              {inv.byLegacy.current ?? 0} current, {inv.byLegacy.renamed_terminology ?? 0} with renamed terms only (not flagged as outdated).
+            </p>
           </div>
-        </Card>
+        </div>
       </div>
-    </div>
+    </Card>
+  );
+}
+
+/** Per-source summary under neutral labels; real names stay in Data Settings and the investigation tabs. */
+function SourcesTable({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
+  if (!q.sources.length) return null;
+  const labels = neutralSourceLabels(q.sources.map((s) => s.key));
+  const multi = q.sources.length > 1;
+  const num = "px-2 py-2 text-right tabular-nums";
+  return (
+    <Card data-testid="dq-sources">
+      <CardHeader
+        title="Sources"
+        action={
+          <Link href={ctx.dataHref} className="text-xs text-accent hover:underline">
+            Source details → Data Settings
+          </Link>
+        }
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="text-[11px] text-faint">
+            <tr>
+              <th className="px-5 py-2 font-medium">Source</th>
+              <th className="px-2 py-2 text-right font-medium">Extracted</th>
+              <th className="px-2 py-2 text-right font-medium">In bank</th>
+              {multi && <th className="px-2 py-2 text-right font-medium">Shared</th>}
+              <th className="px-2 py-2 text-right font-medium">Verified</th>
+              <th className="px-2 py-2 text-right font-medium">Answer conflicts</th>
+              <th className="px-2 py-2 text-right font-medium">Legacy name</th>
+              <th className="px-2 py-2 text-right font-medium">Deprecated</th>
+              <th className="px-2 py-2 text-right font-medium">Needs verification</th>
+              <th className="px-2 py-2 text-right font-medium">Open issues</th>
+              <th className="px-5 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {q.sources.map((s) => {
+              const [label, tone] = SOURCE_STATE[s.state] ?? [s.state, "neutral"];
+              return (
+                <tr key={s.key} data-testid="source-summary-row">
+                  <td className="px-5 py-2 text-fg-2">{labels.get(s.key)!.label}</td>
+                  <td className={num}>{s.extracted}</td>
+                  <td className={num}>{s.questions}</td>
+                  {multi && <td className={num}>{s.shared}</td>}
+                  <td className={num}>{s.verified}</td>
+                  <td className={cn(num, s.conflicts && "text-warn")}>{s.conflicts}</td>
+                  <td className={num}>{s.legacyName}</td>
+                  <td className={num}>{s.deprecated}</td>
+                  <td className={num}>{s.needsVerification}</td>
+                  <td className={num}>
+                    <span className={s.openErrors ? "text-bad" : ""}>{s.openErrors}</span> / <span className={s.openWarnings ? "text-warn" : ""}>{s.openWarnings}</span>
+                  </td>
+                  <td className="px-5 py-2">
+                    <Badge tone={tone}>{label}</Badge>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-line px-5 py-2.5 text-[11px] text-faint">
+        A question found in several sources is counted under each of them; totals above count it once. Open issues are errors / warnings.
+      </p>
+    </Card>
   );
 }
 
@@ -226,63 +354,22 @@ const SOURCE_STATE: Record<string, [string, "ok" | "warn" | "bad" | "neutral" | 
   copied: ["copied", "outline"],
 };
 
+/** Validity of the extracted questions: the second row of the question-quality card. */
 function QualitySummary({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
   return (
-    <Card data-testid="dq-summary">
-      <CardHeader title="Summary" subtitle="A question is valid when it has a stem of at least 10 characters, at least two options and an answer key that matches its options. Counts update after every processing run or edit." />
-      <div className="grid grid-cols-2 gap-4 px-5 pb-4 md:grid-cols-5" data-testid="dq-metrics">
-        <Stat label="Questions" value={q.questions.total} tone="accent" hint={`from ${q.extracted.total} extracted`} />
+    <div className="border-t border-line" data-testid="dq-summary">
+      <div className="grid grid-cols-2 gap-4 px-5 py-4 md:grid-cols-5" data-testid="dq-metrics" title="A question is valid when it has a stem of at least 10 characters, at least two options and an answer key that matches its options.">
+        <Stat label="Extracted" value={q.extracted.total} />
         <Stat label="Valid" value={q.extracted.valid} tone={q.extracted.valid ? "ok" : undefined} />
         <Stat label="Invalid" value={q.extracted.invalid} tone={q.extracted.invalid ? "bad" : undefined} hint={q.extracted.excluded ? `${q.extracted.excluded} excluded` : undefined} />
-        <Stat label="Duplicates merged" value={q.duplicates.merged} hint={`${q.duplicates.rejected} kept separate`} />
-        <Stat label="Duplicates to decide" value={q.duplicates.pending} tone={q.duplicates.pending ? "warn" : undefined} />
-        <Stat label="Needs review" value={q.issues.error + q.issues.warning} tone={q.issues.error ? "bad" : q.issues.warning ? "warn" : "ok"} hint={`${q.issues.error} blocking`} />
         <Stat label="Mapped to objective" value={q.questions.mapped} />
         <Stat label="Unmapped" value={q.questions.unmapped} tone={q.questions.unmapped ? "warn" : undefined} />
         <Stat label="Gradable" value={q.questions.gradable} hint={`${q.questions.ungradable} without verified answer`} />
         <Stat label="Edited by reviewers" value={q.extracted.edited} hint={q.extracted.lowConfidence ? `${q.extracted.lowConfidence} read by OCR` : undefined} />
+        <Stat label="Duplicates merged" value={q.duplicates.merged} hint={`${q.duplicates.rejected} kept separate`} />
+        <Stat label="Duplicates to decide" value={q.duplicates.pending} tone={q.duplicates.pending ? "warn" : undefined} />
+        <Stat label="Needs review" value={q.issues.error + q.issues.warning} tone={q.issues.error ? "bad" : q.issues.warning ? "warn" : "ok"} hint={`${q.issues.error} blocking`} />
       </div>
-      {q.sources.length > 0 && (
-        <div className="overflow-x-auto border-t border-line">
-          <table className="w-full text-left text-xs" data-testid="dq-sources">
-            <thead className="text-[11px] text-faint">
-              <tr>
-                <th className="px-5 py-2 font-medium">Source</th>
-                <th className="px-2 py-2 font-medium">Status</th>
-                <th className="px-2 py-2 text-right font-medium">Extracted</th>
-                <th className="px-2 py-2 text-right font-medium">Valid</th>
-                <th className="px-2 py-2 text-right font-medium">Invalid</th>
-                <th className="px-2 py-2 text-right font-medium">In 2+ sources</th>
-                <th className="px-2 py-2 text-right font-medium">OCR</th>
-                <th className="px-5 py-2 text-right font-medium">Open issues</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {q.sources.map((s) => {
-                const [label, tone] = SOURCE_STATE[s.state] ?? [s.state, "neutral"];
-                return (
-                  <tr key={s.key}>
-                    <td className="px-5 py-2">
-                      <span className="text-fg-2">{s.name}</span> <span className="text-faint">· {s.kind}</span>
-                    </td>
-                    <td className="px-2 py-2">
-                      <Badge tone={tone}>{label}</Badge>
-                    </td>
-                    <td className="px-2 py-2 text-right tabular-nums">{s.extracted}</td>
-                    <td className="px-2 py-2 text-right tabular-nums">{s.valid}</td>
-                    <td className={cn("px-2 py-2 text-right tabular-nums", s.invalid && "text-bad")}>{s.invalid}</td>
-                    <td className="px-2 py-2 text-right tabular-nums">{s.shared}</td>
-                    <td className={cn("px-2 py-2 text-right tabular-nums", s.lowConfidence && "text-warn")}>{s.lowConfidence}</td>
-                    <td className="px-5 py-2 text-right tabular-nums">
-                      <span className={s.openErrors ? "text-bad" : ""}>{s.openErrors}</span> / <span className={s.openWarnings ? "text-warn" : ""}>{s.openWarnings}</span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
       {q.issues.kinds.length > 0 && (
         <div className="border-t border-line px-5 py-3" data-testid="dq-issue-kinds">
           <div className="mb-1.5 text-xs font-medium text-fg-2">Validation errors and warnings</div>
@@ -300,7 +387,7 @@ function QualitySummary({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
           </ul>
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -726,12 +813,52 @@ async function Legacy({ ctx }: { ctx: Ctx }) {
 }
 
 async function Imports({ ctx }: { ctx: Ctx }) {
-  const runs = await prisma.importRun.findMany({ where: { versionId: ctx.vid }, orderBy: { startedAt: "desc" }, take: 30 });
+  const [runs, inv, sourceRows] = await Promise.all([
+    prisma.importRun.findMany({ where: { versionId: ctx.vid }, orderBy: { startedAt: "desc" }, take: 30 }),
+    computeInventory(prisma, ctx.vid),
+    prisma.questionSource.findMany({ where: { versionId: ctx.vid }, orderBy: [{ kind: "asc" }, { id: "asc" }] }),
+  ]);
+  const run = runs.find((r) => r.status === "succeeded" || r.status === "completed");
+  const report = parseJson<RunSummary>(run?.summary ?? "{}", {});
   return (
-    <div>
-      <p className="mb-4 text-xs text-muted">
+    <div className="flex flex-col gap-5">
+      <p className="text-xs text-muted">
         Imports only ever write into draft versions: source occurrences are upserted by source key, canonical codes stay stable across versions, reviewer decisions are kept, and learner progress is never touched. New uploads and URLs are processed from Data Settings.
       </p>
+      {sourceRows.length > 0 && (
+        <div className="flex items-center gap-2 text-sm font-medium text-fg" data-testid="inventory-identity-check">
+          {inv.identityHolds ? <CheckCircle2 className="size-4 text-ok" /> : <XCircle className="size-4 text-bad" />}
+          Unique = {inv.sources.map((x) => x.name).join(" + ")} − overlap: {inv.sources.map((x) => x.occurrences).join(" + ")} − {inv.sourceOccurrences - inv.uniqueQuestions} = {inv.uniqueQuestions}
+          <span className="text-muted">({inv.uniqueQuestions} canonical questions in this version)</span>
+        </div>
+      )}
+      {sourceRows.length > 0 && (
+        <div className="grid gap-5 lg:grid-cols-2" data-testid="extraction-reports">
+          {sourceRows.map((src) => {
+            const rep = report.sources?.[src.id] ?? {};
+            const facts: [string, unknown][] = [
+              ["Kind", src.kind],
+              ["Declared / extracted", `${src.declaredCount ?? "?"} / ${inv.sources.find((x) => x.id === src.id)?.occurrences ?? src.extractedCount}`],
+              ["Only in this source", inv.sources.find((x) => x.id === src.id)?.only ?? 0],
+              ...Object.entries(rep).filter(([k, val]) => !["file", "url", "access_notes"].includes(k) && (typeof val !== "object" || Array.isArray(val))),
+            ];
+            return (
+              <Card key={src.id}>
+                <CardHeader title={`${src.name} extraction`} subtitle={src.url ?? src.fileName ?? undefined} />
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-2 px-5 pb-5 text-xs">
+                  {facts.map(([k, val]) => (
+                    <div key={k} className="flex justify-between gap-3 border-b border-line/50 py-1">
+                      <dt className="text-muted">{k.replaceAll("_", " ")}</dt>
+                      <dd className="text-right text-fg-2 tabular-nums">{fmtValue(val)}</dd>
+                    </div>
+                  ))}
+                </dl>
+                {typeof rep.access_notes === "string" && <p className="px-5 pb-5 text-[11px] text-faint">{rep.access_notes}</p>}
+              </Card>
+            );
+          })}
+        </div>
+      )}
       <Card>
         <div className="divide-y divide-line">
           {runs.map((r) => {

@@ -14,11 +14,13 @@ type Init = { mode: PracticeMode; count: number; domains: number[]; concepts: st
 
 export function PracticeConfigForm({
   initial,
+  modes,
   counts,
   domains,
   concepts,
 }: {
   initial: Init;
+  modes: PracticeMode[];
   counts: Record<PracticeMode, number>;
   domains: { number: number; title: string; count: number }[];
   concepts: { id: string; name: string; domain: number; count: number }[];
@@ -64,7 +66,7 @@ export function PracticeConfigForm({
     <Card>
       <CardHeader title="New session" subtitle="Choose a mode, then refine" />
       <div className="grid gap-2 px-5 sm:grid-cols-2 lg:grid-cols-5">
-        {(Object.keys(PRACTICE_MODES) as PracticeMode[]).map((m) => (
+        {modes.map((m) => (
           <button
             key={m}
             type="button"

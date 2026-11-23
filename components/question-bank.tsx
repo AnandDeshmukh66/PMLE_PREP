@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Image as ImageIcon, MessageSquare } from "lucide-react";
-import { notFound } from "next/navigation";
 import { certPage, versionDomains } from "@/lib/cert";
 import { inCert } from "@/lib/cert-rules";
 import { prisma } from "@/lib/db";
-import { filtersToParams, parseFilters, type Scope, scopeMeta, scopeSourceId } from "@/lib/filters";
+import { filtersToParams, learnerFilters, parseFilters, type Scope, scopeMeta } from "@/lib/filters";
 import { filterRows, loadQuestionRows, versionSources } from "@/lib/questions";
 import { domainShort, pct } from "@/lib/utils";
 import { AlignmentBadge, DomainBadge, LegacyBadge, OutcomeDot, SourceBadges, VerificationBadge } from "./badges";
@@ -19,16 +18,15 @@ type SP = Record<string, string | string[] | undefined>;
 export async function QuestionBank({ params: routeParams, scope, searchParams }: { params: Promise<{ cert: string }>; scope: Scope; searchParams: SP }) {
   const { user, base, version } = await certPage(routeParams);
   const L = (h: string) => inCert(base, h);
-  const filters = parseFilters(searchParams);
-  const [all, sources, domains] = await Promise.all([loadQuestionRows(user.id, version.id), versionSources(version.id), versionDomains(version.id)]);
-  const sid = scopeSourceId(scope);
-  if (sid !== null && !sources.some((s) => s.id === sid)) notFound();
-  const rows = filterRows(all, scope, filters);
+  const admin = user.isAdmin;
+  const filters = learnerFilters(parseFilters(searchParams), admin);
+  const [all, sources, domains] = await Promise.all([loadQuestionRows(user.id, version.id), admin ? versionSources(version.id) : [], versionDomains(version.id)]);
+  const rows = filterRows(all, scope, filters, { sourceSearch: admin });
   const scopeTotal = filterRows(all, scope, {}).length;
   const params = filtersToParams(filters);
   const query = params.toString();
   const concept = filters.concept ? await prisma.theoryConcept.findUnique({ where: { versionId_id: { versionId: version.id, id: filters.concept } }, select: { name: true } }) : null;
-  const meta = scopeMeta(scope, sources);
+  const meta = scopeMeta(scope);
   const linkQuery = new URLSearchParams(params);
   linkQuery.set("from", scope);
   const gradedRows = rows.filter((r) => r.stats.graded > 0);
@@ -38,13 +36,13 @@ export async function QuestionBank({ params: routeParams, scope, searchParams }:
   return (
     <div className="animate-in">
       <PageHeader
-        crumbs={[{ label: "Question bank", href: L("/questions") }, { label: meta.title }]}
+        crumbs={[{ label: "Questions & Review", href: L("/questions") }, { label: meta.title }]}
         title={meta.title}
         description={meta.description}
         actions={<BankActions scope={scope} query={query} ids={rows.map((r) => r.id)} clearKind={clearKind} />}
       />
       <Suspense>
-        <FilterBar conceptName={concept?.name} hideSource={scope === "common"} />
+        <FilterBar conceptName={concept?.name} />
       </Suspense>
       <div className="mb-2 flex items-center justify-between text-xs text-muted">
         <span data-testid="result-count">
@@ -78,13 +76,13 @@ export async function QuestionBank({ params: routeParams, scope, searchParams }:
                     <VerificationBadge status={r.verification} compact />
                     <LegacyBadge status={r.legacyStatus} />
                     {r.multiSelect && <Badge tone="violet">Multi-select</Badge>}
-                    {r.isCommon && scope !== "common" && <Badge tone="outline">Common</Badge>}
+                    {admin && r.isCommon && <Badge tone="outline">Common</Badge>}
                     {r.hasImages && <ImageIcon className="size-3.5 text-faint" aria-label="Has exhibit" />}
                     {r.noteCount > 0 && <MessageSquare className="size-3.5 text-faint" aria-label="Has notes" />}
                   </div>
                   <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-fg-2 group-hover:text-fg">{r.stem.replace(/\[\[img:\d+\]\]/g, "[exhibit]")}</p>
                   <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-faint">
-                    <SourceBadges refs={r.refs} sources={sources} />
+                    {admin && <SourceBadges refs={r.refs} sources={sources} />}
                     {r.subtopic && <span className="truncate">{r.subtopic}</span>}
                     {r.domainNumber && <span className="hidden md:inline">{domainShort(domains[r.domainNumber], 28)}</span>}
                     {r.stats.attempts > 0 && (

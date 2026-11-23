@@ -1,6 +1,10 @@
 # Implementation plans
 
-This folder holds one plan per **significant** feature or change. No plans exist yet; add one only when real work is about to start (see [../README.md](../README.md), rule 4).
+This folder holds one plan per **significant** feature or change. Add one only when real work is about to start (see [../README.md](../README.md), rule 4).
+
+| Plan | Status |
+|---|---|
+| [exam-guide-mapping.md](exam-guide-mapping.md): Questions & Review consolidation, learner source abstraction, Exam Coverage & Quality | Completed 2026-11-21 |
 
 ## When to write a plan
 
