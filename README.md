@@ -53,7 +53,7 @@ When the sources disagree, the question is labelled and not scored, so you're no
 
 ## What's inside?
 
-- **Certification home:** where you land after signing in. PMLE is ready; more certifications (PDE is listed) appear once an admin publishes their content.
+- **Certification home:** where you land after signing in. PMLE is ready; more certifications appear once their content is published.
 - **Dashboard:** progress, domain readiness, and "continue where you left off".
 - **Study Plan:** a day-by-day schedule up to your exam date.
 - **Practice:** focused sessions by domain, topic, mistakes or weak areas.
@@ -61,9 +61,9 @@ When the sources disagree, the question is labelled and not scored, so you're no
 - **Questions & Review:** All Questions to browse, take notes, flag and bookmark, plus your personal revision piles: Marked for Review, Flagged Questions, Incorrect Questions and Bookmarks.
 - **Theory Checklist:** 149 concepts from the 2026 guide, gen-AI topics included.
 - **Exam Blueprint and Analytics:** where the marks are, and where you stand.
-- **Exam Coverage & Quality (admins only):** how the bank covers the official exam guide, how it was built, and how much to trust each answer.
+- **Exam Coverage & Quality (admins only, read-only):** how the published bank covers the official exam guide, how it was built, and how much to trust each answer.
 - **Settings:** preferences, Download My Backup, log out.
-- **Data Settings (admins only):** add certifications, import content, review and publish new versions. See [docs/INGESTION.md](docs/INGESTION.md) and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+- **Content is loaded offline:** the app has no upload, ingestion or content-editing screens. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## How it helps
 

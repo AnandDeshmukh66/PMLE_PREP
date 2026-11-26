@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { type Browser, expect, type Page, test } from "@playwright/test";
+import { E2E_DRAFT_MARKER, E2E_DRAFT_VERSION_ID } from "./fixtures";
 
 const DOMAIN = "acme-corp.com";
 const C = "/c/pmle";
@@ -607,6 +608,7 @@ test.describe("certification home, versions and administration", () => {
     await expect(page.getByTestId("cert-card-pde")).toHaveCount(0);
     await expect(page.getByTestId("no-other-certs")).toBeVisible();
     await expect(page.getByTestId("add-certification")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /Add certification/i })).toHaveCount(0);
     for (const [legacy, now] of [["/questions", `${C}/questions`], ["/pdf", `${C}/questions`], ["/theory", `${C}/theory`], ["/mock", `${C}/mock`]]) {
       await go(page, legacy);
       await expect(page, legacy).toHaveURL(new RegExp(`${now.replace(/\//g, "\\/")}$`));
@@ -614,17 +616,64 @@ test.describe("certification home, versions and administration", () => {
     for (const hidden of ["/c/pde", `${C}/data`, "/certifications/new"]) expect((await go(page, hidden))?.status(), hidden).toBe(404);
   });
 
-  test("an administrator unlocks admin mode, adds a certification from a file, and publishes it for learners", async ({ browser }) => {
+  test("Data Settings, Add Certification and in-app ingestion are gone for administrators and learners", async ({ browser }) => {
     const admin = await browser.newContext();
     const page = await admin.newPage();
-    page.on("dialog", (d) => d.accept());
     await signIn(page, ADMIN);
     await go(page, "/");
-    await expect(page.getByTestId("cert-card-pde")).toContainText(/no published|not published|draft/i);
-    await expect(page.getByTestId("add-certification-locked")).toBeVisible();
-    expect((await go(page, `${C}/data`))?.status()).toBe(200);
-    await expect(page.getByTestId("data-readonly")).toBeVisible();
+    // No card for a certification without published content, no draft badges, no add/settings links.
+    await expect(page.getByTestId("cert-card-pde")).toHaveCount(0);
+    await expect(page.getByTestId("cert-card-pmle")).toContainText("2026");
+    await expect(page.getByTestId("cert-card-pmle")).not.toContainText(E2E_DRAFT_MARKER);
+    for (const gone of [/Add certification/i, /Data settings/i]) await expect(page.locator("body"), String(gone)).not.toContainText(gone);
+    await go(page, C);
+    await expect(page.locator("aside nav")).toContainText("Exam Coverage & Quality");
+    await expect(page.locator("aside nav")).not.toContainText(/Data Settings/i);
+    await expect(page.locator("main")).toContainText("Exam guide effective June 1, 2026");
 
+    for (const gone of [`${C}/data`, "/certifications/new", "/c/pde", "/c/pde/data"]) expect((await go(page, gone))?.status(), gone).toBe(404);
+    expect((await page.request.post("/api/ingest/upload", { data: { kind: "json" } })).status()).toBe(404);
+
+    const learner = await browser.newContext();
+    const lp = await learner.newPage();
+    await signIn(lp, newEmail("learner"));
+    for (const gone of [`${C}/data`, "/certifications/new", `${C}/data-quality`]) expect((await go(lp, gone))?.status(), gone).toBe(404);
+    expect((await lp.request.post("/api/ingest/upload", { data: { kind: "json" } })).status()).toBe(404);
+    await go(lp, `${C}/blueprint`);
+    await expect(lp.locator("main")).toContainText("Exam guide effective June 1, 2026");
+    await admin.close();
+    await learner.close();
+  });
+
+  test("Exam Coverage & Quality is read-only and published-only: eight tabs, no editing controls, no draft through ?version=", async ({ page }) => {
+    await signIn(page, ADMIN);
+    const tabs = ["overview", "questions", "duplicates", "answers", "issues", "classification", "legacy", "imports"];
+    await go(page, `${C}/data-quality`);
+    await expect(page.locator("[data-testid^='dq-tab-']")).toHaveCount(8);
+    const editing = /Approve|Reject|Undo|Resolve|Exclude|Restore|Save|Edit|Set answer|Reopen|Ignore/;
+    for (const tab of tabs) {
+      for (const suffix of ["", `&version=${E2E_DRAFT_VERSION_ID}`]) {
+        const res = await go(page, `${C}/data-quality?tab=${tab}${suffix}`);
+        expect(res?.status(), `${tab}${suffix}`).toBe(200);
+        await expect(page.getByTestId("dq-readonly")).toBeVisible();
+        for (const id of ["dq-draft", "dq-elevate"]) await expect(page.getByTestId(id)).toHaveCount(0);
+        await expect(page.locator("main").getByRole("button", { name: editing })).toHaveCount(0);
+        await expect(page.locator("main a[href$='/data'], main a[href*='/data?']")).toHaveCount(0);
+        const html = await page.content();
+        expect(html, `${tab}${suffix}`).not.toContain(E2E_DRAFT_MARKER);
+        // The draft id in the address is only echoed back; nothing on the page may link to another version.
+        await expect(page.locator("main a[href*='version=']")).toHaveCount(0);
+      }
+    }
+    // The unpublished draft stays invisible and the published version is still what is shown.
+    await go(page, `${C}/data-quality?version=${E2E_DRAFT_VERSION_ID}`);
+    await expect(page.getByTestId("distribution-alignment")).toContainText("339");
+    await go(page, `${C}/data-quality?tab=questions&version=${E2E_DRAFT_VERSION_ID}`);
+    await expect(page.getByTestId("q-card").first()).not.toContainText(E2E_DRAFT_MARKER);
+  });
+
+  test("an administrator can still unlock admin mode from Settings", async ({ page }) => {
+    await signIn(page, ADMIN);
     await go(page, "/settings#admin-access");
     await page.getByTestId("admin-code").fill("wrong-code-000");
     await page.getByTestId("admin-elevate").click();
@@ -632,77 +681,5 @@ test.describe("certification home, versions and administration", () => {
     await page.getByTestId("admin-code").fill(ACCESS_CODE);
     await page.getByTestId("admin-elevate").click();
     await expect(page.getByTestId("admin-elevated")).toBeVisible();
-
-    const slug = `e2e${Date.now().toString(36).slice(-5)}`;
-    const questions = Array.from({ length: 4 }, (_, i) => ({
-      number: i + 1,
-      stem: `E2E fixture question ${i + 1}: which option keeps the fixture pipeline maintainable with the least effort?`,
-      options: [
-        { label: "A", text: `Managed option ${i + 1}` },
-        { label: "B", text: `Manual option ${i + 1}` },
-      ],
-      answer: ["A"],
-    }));
-    const file = { name: "fixture.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ format: "cert-prep-questions/v1", source: { name: "E2E fixture" }, questions })) };
-
-    await go(page, "/");
-    await page.getByTestId("add-certification").click();
-    await page.getByTestId("cert-code").fill(slug);
-    await page.getByTestId("cert-name").fill("E2E Fixture Certification");
-    await page.getByTestId("cert-file").setInputFiles(file);
-    await page.getByTestId("create-cert").click();
-    await page.waitForURL(new RegExp(`/c/${slug}/data$`));
-    const source = page.getByTestId("source-row").first();
-    await expect(source).toHaveAttribute("data-state", "waiting");
-    await expect(page.getByTestId("readiness")).toContainText(/not processed yet/);
-    await page.getByTestId("start-processing").click();
-    await expect(page.getByTestId("start-result")).toContainText("Started processing 1 source");
-    await expect(source).toHaveAttribute("data-state", "processed", { timeout: 30_000 });
-    await expect(page.getByTestId("draft-sources")).toContainText("4 extracted");
-    await expect(page.getByTestId("job-row").first()).toContainText("4/4 valid");
-    await expect(page.getByTestId("start-processing")).toBeDisabled();
-
-    await go(page, `/c/${slug}/data-quality?tab=questions`);
-    await expect(page.getByTestId("dq-tab-questions")).toBeVisible();
-    await expect(page.getByTestId("q-card")).toHaveCount(4);
-    const first = page.getByTestId("q-card").first();
-    const code = await first.getAttribute("data-code");
-    await first.getByTestId(`edit-${code}`).click();
-    await first.getByTestId("edit-option-A").fill("Managed option, edited in review");
-    await first.getByTestId("edit-save").click();
-    await expect(first).toContainText("Managed option, edited in review");
-    await expect(first).toContainText("edited by");
-    await page.reload();
-    await expect(page.locator(`[data-code="${code}"]`)).toContainText("Managed option, edited in review");
-    await go(page, `/c/${slug}/data-quality`);
-    await expect(page.getByTestId("dq-metrics")).toContainText("Valid");
-    await expect(page.getByTestId("dq-sources")).toContainText("Source");
-    await expect(page.getByTestId("dq-sources")).not.toContainText("fixture");
-    await expect(page.getByTestId("dq-sources")).toContainText("processed");
-    await expect(page.getByTestId("distribution-alignment")).toHaveAttribute("data-state", /unverified/);
-    await expect(page.getByTestId("bda-score")).toHaveCount(0);
-    await expect(page.getByTestId("distribution-alignment")).toContainText("4 unique questions");
-    await go(page, `/c/${slug}/data-quality?tab=imports`);
-    await expect(page.getByTestId("extraction-reports")).toContainText("fixture extraction");
-    await go(page, `/c/${slug}/data`);
-
-    const learner = await browser.newContext();
-    const lp = await learner.newPage();
-    await signIn(lp, newEmail("learner"));
-    await expect(lp.getByTestId(`cert-card-${slug}`)).toHaveCount(0);
-    expect((await go(lp, `/c/${slug}`))?.status()).toBe(404);
-
-    await page.getByTestId(`submit-${new Date().getFullYear()}`).click();
-    await expect(page.getByTestId(`publish-${new Date().getFullYear()}`)).toBeVisible();
-    await page.getByTestId(`publish-${new Date().getFullYear()}`).click();
-    await expect(page.getByTestId("published-summary")).toContainText("4", { timeout: 15_000 });
-
-    await go(lp, "/");
-    await expect(lp.getByTestId(`cert-card-${slug}`)).toContainText("E2E Fixture Certification");
-    await go(lp, `/c/${slug}/questions`);
-    await expect(lp.getByTestId("question-row")).toHaveCount(4);
-    expect((await go(lp, `/c/${slug}/data`))?.status()).toBe(404);
-    await admin.close();
-    await learner.close();
   });
 });

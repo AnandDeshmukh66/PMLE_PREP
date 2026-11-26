@@ -1,5 +1,5 @@
 import "server-only";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { cache } from "react";
 import { type CurrentUser, requireUser } from "./auth";
 import { certBase, isVisibleStatus, normalizeSlug, VISIBLE_STATUSES } from "./cert-rules";
@@ -30,19 +30,16 @@ export const loadCert = cache(async (slugRaw: string) => {
 });
 
 /**
- * For study pages under /c/[cert]: signed-in user, the certification and its published version. Certifications
- * without a published version do not exist for learners (404); administrators are sent to the Data page instead.
+ * For study pages under /c/[cert]: signed-in user, the certification and its published version. A certification
+ * without a published version does not exist for anyone (404).
  */
 export async function certPage(params: Promise<{ cert: string }>): Promise<CertContext & { version: VersionSummary }> {
   const ctx = await certAdminPage(params);
-  if (!ctx.version) {
-    if (ctx.user.isAdmin) redirect(`${ctx.base}/data`);
-    notFound();
-  }
+  if (!ctx.version) notFound();
   return ctx as CertContext & { version: VersionSummary };
 }
 
-/** Like certPage, but tolerates a certification with no published version (layout, Data settings). */
+/** Like certPage, but tolerates a certification with no published version (the layout resolves the route first). */
 export async function certAdminPage(params: Promise<{ cert: string }>): Promise<CertContext> {
   const user = await requireUser();
   const { cert: slug } = await params;
@@ -95,18 +92,16 @@ export async function visibleVersionByLabel(certificationId: string, label: stri
 export type HomeCard = CertSummary & {
   version: VersionSummary | null;
   progress: { attempted: number; total: number; accuracy: number | null; theoryDone: number; theoryTotal: number; lastActivity: Date | null } | null;
-  drafts: { id: string; label: string; status: string }[];
   history: number;
 };
 
-/** Certification cards for the home page. Drafts are only included for administrators. */
+/** Certification cards for the home page: active certifications with a published version, the same for everyone. */
 export async function loadHomeCards(user: CurrentUser): Promise<HomeCard[]> {
   const certs = await prisma.certification.findMany({
-    where: user.isAdmin ? {} : { status: "active", currentVersion: { status: "published" } },
+    where: { status: "active", currentVersion: { status: "published" } },
     select: { ...certSelect, currentVersion: { select: versionSelect }, versions: { select: { id: true, label: true, status: true }, orderBy: { createdAt: "desc" } } },
     orderBy: [{ createdAt: "asc" }, { code: "asc" }],
   });
-  certs.sort((a, b) => Number(a.currentVersion?.status !== "published") - Number(b.currentVersion?.status !== "published"));
   const cards: HomeCard[] = [];
   for (const c of certs) {
     const version = c.currentVersion?.status === "published" ? c.currentVersion : null;
@@ -127,7 +122,6 @@ export async function loadHomeCards(user: CurrentUser): Promise<HomeCard[]> {
       ...cert,
       version,
       progress,
-      drafts: user.isAdmin ? versions.filter((v) => v.status === "draft" || v.status === "review") : [],
       history: versions.filter((v) => v.status === "archived").length,
     });
   }

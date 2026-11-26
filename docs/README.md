@@ -15,7 +15,7 @@ Entry point for the project documentation. Read this first, then `CURRENT_STATE.
 Operational guides that predate this structure and remain valid (they are detailed references, not duplicated here):
 
 - [DEPLOYMENT.md](DEPLOYMENT.md): hosting, PostgreSQL/Neon setup, backups and recovery, security checklist.
-- [INGESTION.md](INGESTION.md): ingestion sources, job states, error codes, server requirements.
+- [INGESTION.md](INGESTION.md): **archived**; describes the in-app ingestion system removed on 2026-11-24 (kept as history).
 
 Other files outside `docs/`: `README.md` (learner-oriented project introduction), `PROGRESS.md` (older release checklist, partly stale; see "Known documentation inconsistencies" in CURRENT_STATE.md), `AGENTS.md` (Next.js agent notice written by `next dev`).
 

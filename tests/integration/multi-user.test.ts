@@ -135,11 +135,9 @@ describe("email sign-in", () => {
     expect((await m.auth.getCurrentUser())!.id).toBe(aliceId);
   });
 
-  it("restricts shared question-bank changes to administrators", async () => {
+  it("recognises administrators by email only", async () => {
     as(alice);
-    const pair = await m.prisma.duplicateCandidate.findFirstOrThrow();
-    await expect(m.actions.decideDuplicate(pair.versionId, pair.pairKey, "reject")).rejects.toBeInstanceOf(m.auth.ForbiddenError);
-    await expect(m.actions.resolveAnswer(qs[0].id, ["A"])).rejects.toBeInstanceOf(m.auth.ForbiddenError);
+    expect((await m.auth.getCurrentUser())!.isAdmin).toBe(false);
     await login(ADMIN);
     expect((await m.auth.getCurrentUser())!.isAdmin).toBe(true);
   });

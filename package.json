@@ -21,8 +21,7 @@
     "backup": "tsx scripts/backup-db.ts",
     "ingest:python": "../.venv/bin/python scripts/pipeline.py",
     "ingest:db": "tsx scripts/import-db.ts",
-    "ingest": "npm run ingest:python && npm run ingest:db",
-    "ingest:worker": "tsx scripts/ingest-worker.ts"
+    "ingest": "npm run ingest:python && npm run ingest:db"
   },
   "dependencies": {
     "@neon/config": "^1.11.3",

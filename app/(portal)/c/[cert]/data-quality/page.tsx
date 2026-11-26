@@ -2,11 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { LegacyBadge, VerificationBadge } from "@/components/badges";
-import { AnswerResolver, ClassificationPicker, DuplicateButtons, IssueButtons } from "@/components/dq-actions";
-import { ExcludeToggle, QuestionEditor } from "@/components/question-editor";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat } from "@/components/ui";
 import { certAdminPage } from "@/lib/cert";
-import { inCert, isEditableStatus, neutralSourceLabels, VERSION_STATUS_LABEL, type VersionStatus } from "@/lib/cert-rules";
+import { inCert, neutralSourceLabels } from "@/lib/cert-rules";
 import { prisma } from "@/lib/db";
 import { LEGACY_FLAGGED, type SourceInfo } from "@/lib/filters";
 import { parseJson } from "@/lib/json";
@@ -14,8 +12,7 @@ import { BlueprintShare } from "@/components/blueprint-share";
 import { DistributionCard } from "@/components/distribution-card";
 import { blueprintDistribution, type Distribution, parseVerifiedWeights, PROPORTIONAL_PP, verificationState } from "@/lib/blueprint";
 import { computeInventory } from "@/lib/inventory";
-import { type DraftQuality, isValidOccurrence, loadDraftQuality } from "@/lib/quality";
-import { manualEditOf } from "@/lib/question-edit";
+import { isValidOccurrence, loadPublishedQuality, manualEditOf, type PublishedQuality } from "@/lib/quality";
 import { ISSUE_TEXT, LOW_CONFIDENCE_METHODS } from "@/lib/review-queue";
 import { cn, domainColor, pct, relTime } from "@/lib/utils";
 
@@ -32,38 +29,27 @@ const TABS = [
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
-type Ctx = { vid: string; canEdit: boolean; tabHref: (query: string) => string; qHref: (code: string) => string | null; dataHref: string; sources: SourceInfo[] };
+type Ctx = { vid: string; tabHref: (query: string) => string; qHref: (code: string) => string; sources: SourceInfo[] };
 
 function QCode({ ctx, code, className }: { ctx: Ctx; code: string; className?: string }) {
-  const href = ctx.qHref(code);
-  return href ? (
-    <Link href={href} className={className}>
+  return (
+    <Link href={ctx.qHref(code)} className={className}>
       {code}
     </Link>
-  ) : (
-    <span className={className}>{code}</span>
   );
 }
 
-/** Exam Coverage & Quality (administrators only): the published version read-only, or a draft (?version=). */
+/**
+ * Exam Coverage & Quality: administrators only, read-only, and only ever the published version. There is no way to
+ * request another version: the `version` query parameter is ignored, and the loader refuses unpublished versions.
+ */
 export default async function DataQualityPage({ params, searchParams }: { params: Promise<{ cert: string }>; searchParams: Promise<SP> }) {
   const sp = await searchParams;
-  const { user, cert, base, version: published } = await certAdminPage(params);
-  if (!user.isAdmin) notFound();
+  const { user, cert, base, version: v } = await certAdminPage(params);
+  if (!user.isAdmin || !v) notFound();
   const L = (h: string) => inCert(base, h);
-  const requested = typeof sp.version === "string" ? sp.version : null;
-  const fields = { id: true, label: true, status: true, publishedAt: true, publishedBy: true, guideTitle: true, questionCount: true, objectiveCount: true } as const;
-  let v = published;
-  if (requested && requested !== published?.id) {
-    v = await prisma.contentVersion.findFirst({ where: { id: requested, certificationId: cert.id }, select: fields });
-  } else if (!v) {
-    v = await prisma.contentVersion.findFirst({ where: { certificationId: cert.id, status: { in: ["draft", "review"] } }, orderBy: { createdAt: "desc" }, select: fields });
-  }
-  if (!v) notFound();
-  const editable = isEditableStatus(v.status);
-  const vq = v.id === published?.id ? "" : `&version=${encodeURIComponent(v.id)}`;
   const sources = await prisma.questionSource.findMany({ where: { versionId: v.id }, select: { id: true, name: true, kind: true }, orderBy: [{ kind: "asc" }, { id: "asc" }] });
-  const ctx: Ctx = { vid: v.id, canEdit: user.canManageContent && editable, tabHref: (q) => L(`/data-quality?${q}${vq}`), qHref: (code) => (vq ? null : L(`/questions/${code}`)), dataHref: L("/data"), sources };
+  const ctx: Ctx = { vid: v.id, tabHref: (q) => L(`/data-quality?${q}`), qHref: (code) => L(`/questions/${code}`), sources };
   const tab = (TABS.find((t) => t.id === sp.tab)?.id ?? "overview") as Tab;
   const vw = { versionId: v.id };
   const counts = {
@@ -78,29 +64,11 @@ export default async function DataQualityPage({ params, searchParams }: { params
     <div className="animate-in">
       <PageHeader
         title="Exam Coverage & Quality"
-        description={`${cert.code} ${v.label} (${VERSION_STATUS_LABEL[v.status as VersionStatus] ?? v.status}). How the bank covers the official exam guide, extraction results, deduplication decisions, answer verification and the manual review queue.`}
+        description={`${cert.code} ${v.label} (published). How the bank covers the official exam guide, extraction results, deduplication decisions, answer verification and the manual review queue.`}
       />
-      {!editable ? (
-        <div className="mb-5 rounded-lg border border-line bg-surface-2 px-4 py-2.5 text-[12.5px] text-muted" data-testid="dq-readonly">
-          Read-only view of a {v.status} version. Published content never changes, so learners&apos; progress always refers to exactly what they studied. To correct something, create a draft in{" "}
-          <Link href={L("/data")} className="text-accent hover:underline">
-            Data Settings
-          </Link>
-          , review it there and publish it.
-        </div>
-      ) : !ctx.canEdit ? (
-        <div className="mb-5 rounded-lg border border-warn/30 bg-warn-soft px-4 py-2.5 text-[12.5px] text-warn" data-testid="dq-elevate">
-          Confirm your administrator access code in Settings to change this draft.
-        </div>
-      ) : (
-        <div className="mb-5 rounded-lg border border-accent/30 bg-accent-soft px-4 py-2.5 text-[12.5px] text-fg-2" data-testid="dq-draft">
-          Reviewing draft {v.label}. Decisions here change the draft only; learners see them after it is published from{" "}
-          <Link href={L("/data")} className="text-accent hover:underline">
-            Data Settings
-          </Link>
-          .
-        </div>
-      )}
+      <div className="mb-5 rounded-lg border border-line bg-surface-2 px-4 py-2.5 text-[12.5px] text-muted" data-testid="dq-readonly">
+        Read-only view of the published version. Published content never changes, so learners&apos; progress always refers to exactly what they studied.
+      </div>
       <nav className="mb-5 flex gap-1 overflow-x-auto border-b border-line" aria-label="Exam coverage and quality sections">
         {TABS.map((t) => (
           <Link key={t.id} href={ctx.tabHref(`tab=${t.id}`)} className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] whitespace-nowrap transition-colors", tab === t.id ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg-2")} data-testid={`dq-tab-${t.id}`}>
@@ -127,7 +95,7 @@ const fmtValue = (v: unknown) => (Array.isArray(v) ? (v.length ? v.slice(0, 20).
 
 async function Overview({ ctx }: { ctx: Ctx }) {
   const [quality, domains, objectives, objectiveCounts, version] = await Promise.all([
-    loadDraftQuality(prisma, ctx.vid),
+    loadPublishedQuality(prisma, ctx.vid),
     prisma.examDomain.findMany({ where: { versionId: ctx.vid }, orderBy: { number: "asc" }, select: { number: true, title: true, weightPercent: true } }),
     prisma.examObjective.findMany({ where: { versionId: ctx.vid }, orderBy: [{ domainNumber: "asc" }, { order: "asc" }], select: { code: true } }),
     prisma.canonicalQuestion.groupBy({ by: ["objectiveCode"], where: { versionId: ctx.vid, active: true }, _count: true }),
@@ -155,7 +123,7 @@ async function Overview({ ctx }: { ctx: Ctx }) {
       )}
       <DomainTable dist={dist} empty={empty} ctx={ctx} />
       <QuestionQuality q={quality} ctx={ctx} />
-      <SourcesTable q={quality} ctx={ctx} />
+      <SourcesTable q={quality} />
     </div>
   );
 }
@@ -229,7 +197,7 @@ function DomainTable({ dist, empty, ctx }: { dist: Distribution; empty: string[]
   );
 }
 
-function QuestionQuality({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
+function QuestionQuality({ q, ctx }: { q: PublishedQuality; ctx: Ctx }) {
   const inv = q.inventory;
   const legacy = ["renamed_service", "deprecated_feature", "possibly_outdated", "verified_obsolete"] as const;
   return (
@@ -278,22 +246,15 @@ function QuestionQuality({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
   );
 }
 
-/** Per-source summary under neutral labels; real names stay in Data Settings and the investigation tabs. */
-function SourcesTable({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
+/** Per-source summary under neutral labels; real names stay in the investigation tabs. */
+function SourcesTable({ q }: { q: PublishedQuality }) {
   if (!q.sources.length) return null;
   const labels = neutralSourceLabels(q.sources.map((s) => s.key));
   const multi = q.sources.length > 1;
   const num = "px-2 py-2 text-right tabular-nums";
   return (
     <Card data-testid="dq-sources">
-      <CardHeader
-        title="Sources"
-        action={
-          <Link href={ctx.dataHref} className="text-xs text-accent hover:underline">
-            Source details → Data Settings
-          </Link>
-        }
-      />
+      <CardHeader title="Sources" />
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="text-[11px] text-faint">
@@ -308,12 +269,10 @@ function SourcesTable({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
               <th className="px-2 py-2 text-right font-medium">Deprecated</th>
               <th className="px-2 py-2 text-right font-medium">Needs verification</th>
               <th className="px-2 py-2 text-right font-medium">Open issues</th>
-              <th className="px-5 py-2 font-medium">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
             {q.sources.map((s) => {
-              const [label, tone] = SOURCE_STATE[s.state] ?? [s.state, "neutral"];
               return (
                 <tr key={s.key} data-testid="source-summary-row">
                   <td className="px-5 py-2 text-fg-2">{labels.get(s.key)!.label}</td>
@@ -328,9 +287,6 @@ function SourcesTable({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
                   <td className={num}>
                     <span className={s.openErrors ? "text-bad" : ""}>{s.openErrors}</span> / <span className={s.openWarnings ? "text-warn" : ""}>{s.openWarnings}</span>
                   </td>
-                  <td className="px-5 py-2">
-                    <Badge tone={tone}>{label}</Badge>
-                  </td>
                 </tr>
               );
             })}
@@ -344,18 +300,8 @@ function SourcesTable({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
   );
 }
 
-const SOURCE_STATE: Record<string, [string, "ok" | "warn" | "bad" | "neutral" | "accent" | "outline"]> = {
-  waiting: ["waiting to start", "neutral"],
-  queued: ["queued", "accent"],
-  retry_scheduled: ["retry scheduled", "warn"],
-  processing: ["processing", "accent"],
-  processed: ["processed", "ok"],
-  failed: ["failed", "bad"],
-  copied: ["copied", "outline"],
-};
-
 /** Validity of the extracted questions: the second row of the question-quality card. */
-function QualitySummary({ q, ctx }: { q: DraftQuality; ctx: Ctx }) {
+function QualitySummary({ q, ctx }: { q: PublishedQuality; ctx: Ctx }) {
   return (
     <div className="border-t border-line" data-testid="dq-summary">
       <div className="grid grid-cols-2 gap-4 px-5 py-4 md:grid-cols-5" data-testid="dq-metrics" title="A question is valid when it has a stem of at least 10 characters, at least two options and an answer key that matches its options.">
@@ -436,7 +382,6 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
       <form className="ml-auto flex items-center gap-1.5" action="" method="get">
         <input type="hidden" name="tab" value="questions" />
         <input type="hidden" name="show" value={filter} />
-        {ctx.tabHref("").includes("version=") && <input type="hidden" name="version" value={ctx.vid} />}
         <input name="q" defaultValue={search} placeholder="Search text or code" className="h-7 w-48 rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-fg outline-none focus-visible:border-accent" data-testid="q-search" />
       </form>
     </div>
@@ -447,7 +392,7 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
     return (
       <div>
         {filterBar}
-        <p className="mb-4 text-xs text-muted">Excluded source questions form no question and are not published. Restore one to bring it back.</p>
+        <p className="mb-4 text-xs text-muted">Excluded source questions form no question and are not published.</p>
         {excluded.length === 0 ? (
           <EmptyState title="Nothing excluded" />
         ) : (
@@ -457,7 +402,6 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
                 <div key={o.sourceKey} className="flex flex-wrap items-center gap-3 px-5 py-2.5 text-xs">
                   <Badge tone="outline">{`${sourceName(o.sourceId)} Q${o.sourceQnum}`}</Badge>
                   <span className="min-w-0 flex-1 truncate text-muted">{o.stem}</span>
-                  {ctx.canEdit && <ExcludeToggle versionId={vid} sourceKey={o.sourceKey} excluded />}
                 </div>
               ))}
             </div>
@@ -480,9 +424,9 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
     <div>
       {filterBar}
       <p className="mb-4 text-xs text-muted" data-testid="q-count">
-        {matching.length} of {active.length} questions{filter !== "all" || needle ? " match" : ""}. Each question shows every source it was found in (provenance).{ctx.canEdit ? " Edits apply to this draft only." : ""}
+        {matching.length} of {active.length} questions{filter !== "all" || needle ? " match" : ""}. Each question shows every source it was found in (provenance).
       </p>
-      {qs.length === 0 && <EmptyState title="No questions match" description={active.length ? "Try another filter." : "Process a source to extract questions."} />}
+      {qs.length === 0 && <EmptyState title="No questions match" description={active.length ? "Try another filter." : "This version has no questions."} />}
       <div className="flex flex-col gap-3">
         {qs.map((q) => {
           const correct = parseJson<string[] | null>(q.correctLabels, null);
@@ -500,7 +444,6 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
                 {anyEdited && <Badge tone="accent">edited</Badge>}
                 {invalid && <Badge tone="bad">invalid</Badge>}
                 {q.issues.filter((i) => i.severity === "error").length > 0 && <Badge tone="bad">{q.issues.filter((i) => i.severity === "error").length} blocking</Badge>}
-                <span className="ml-auto">{ctx.canEdit && <QuestionEditor questionId={q.id} code={q.code} stem={q.stem} options={q.options.map((o) => ({ label: o.label, text: o.text }))} answer={shown} explanation={q.explanations[0]?.content ?? null} />}</span>
               </div>
               <p className="prose-q whitespace-pre-line text-[13px] text-fg-2">{q.stem.replace(/\[\[img:\d+\]\]/g, "[image]")}</p>
               <ul className="mt-2 space-y-0.5 text-xs">
@@ -542,11 +485,6 @@ async function Questions({ ctx, filter, page, search }: { ctx: Ctx; filter: stri
                         {o.id === q.primaryOccurrenceId && <span className="text-faint">· shown text</span>}
                         {edit && <span className="text-accent">edited by {edit.by} {relTime(edit.at)}</span>}
                         {!isValidOccurrence(o) && <span className="text-bad">incomplete</span>}
-                        {ctx.canEdit && (
-                          <span className="ml-auto">
-                            <ExcludeToggle versionId={vid} sourceKey={o.sourceKey} excluded={false} />
-                          </span>
-                        )}
                       </li>
                     );
                   })}
@@ -616,7 +554,7 @@ async function Duplicates({ filter, ctx }: { filter: string; ctx: Ctx }) {
     { id: "review", label: "Needs a look (pending + near-miss rejections)" },
     { id: "merged", label: "Fuzzy / semantic merges" },
     { id: "rejected", label: "Rejected" },
-    { id: "decided", label: "Your decisions" },
+    { id: "decided", label: "Reviewer decisions" },
     { id: "all", label: "All" },
   ];
   return (
@@ -629,7 +567,7 @@ async function Duplicates({ filter, ctx }: { filter: string; ctx: Ctx }) {
         ))}
       </div>
       <p className="mb-4 text-xs text-muted">
-        Exact matches merge automatically. Fuzzy matches merge when stems are at least 90% similar, options at least 85% similar, no numbers differ and answers agree. Pairs from the same source with differing details are kept separate as variants. Approving or rejecting a pair rebuilds canonical questions immediately; attempts, flags and notes follow the question.
+        Exact matches merge automatically. Fuzzy matches merge when stems are at least 90% similar, options at least 85% similar, no numbers differ and answers agree. Pairs from the same source with differing details are kept separate as variants.
       </p>
       {cands.length === 0 && <EmptyState title="Nothing here" description="No duplicate candidates match this filter." />}
       <div className="flex flex-col gap-3">
@@ -649,9 +587,6 @@ async function Duplicates({ filter, ctx }: { filter: string; ctx: Ctx }) {
               <OccPanel o={byKey.get(c.aKey)} ctx={ctx} />
               <OccPanel o={byKey.get(c.bKey)} ctx={ctx} />
             </div>
-            <div className="mt-3 border-t border-line pt-3">
-              {ctx.canEdit && <DuplicateButtons versionId={ctx.vid} pairKey={c.pairKey} status={c.status} previousStatus={c.previousStatus} />}
-            </div>
           </Card>
         ))}
       </div>
@@ -668,7 +603,7 @@ async function Answers({ ctx }: { ctx: Ctx }) {
   return (
     <div>
       <p className="mb-4 text-xs text-muted">
-        These questions have disagreeing answer keys, disputed community votes or no key. They are not graded until an administrator resolves them in a draft. Setting an answer creates a reviewer-verified claim that learners get when the draft is published. Check the official documentation before deciding.
+        These questions have disagreeing answer keys, disputed community votes or no key. They are not graded until the answer is verified.
       </p>
       {qs.length === 0 && <EmptyState title="No answer conflicts" />}
       <div className="flex flex-col gap-3">
@@ -699,9 +634,11 @@ async function Answers({ ctx }: { ctx: Ctx }) {
                       {c.incomplete ? " · incomplete" : ""}
                     </span>
                   ))}
-              </div>
-              <div className="mt-3 border-t border-line pt-3">
-                {ctx.canEdit && <AnswerResolver questionId={q.id} labels={q.options.map((o) => o.label)} current={override ? parseJson<string[]>(override.labels, []) : null} hasOverride={!!override} />}
+                {override && (
+                  <span className="text-muted">
+                    reviewer answer: <span className="font-semibold text-fg-2">{parseJson<string[]>(override.labels, []).join(", ")}</span>
+                  </span>
+                )}
               </div>
             </Card>
           );
@@ -752,7 +689,6 @@ async function Issues({ kind, status, ctx }: { kind?: string; status: string; ct
                 )}
                 <span className="min-w-0 flex-1 text-fg-2">{i.message}</span>
                 {i.resolution && <span className="text-faint">{i.resolution}</span>}
-                {ctx.canEdit && <IssueButtons versionId={ctx.vid} issueKey={i.issueKey} status={i.status} />}
               </div>
             ))}
           </div>
@@ -763,13 +699,10 @@ async function Issues({ kind, status, ctx }: { kind?: string; status: string; ct
 }
 
 async function Classification({ ctx }: { ctx: Ctx }) {
-  const [qs, objectives] = await Promise.all([
-    prisma.canonicalQuestion.findMany({ where: { versionId: ctx.vid, active: true, OR: [{ classificationStatus: "unmapped" }, { classificationConfidence: "low" }, { classificationStatus: "manual" }] }, orderBy: [{ classificationStatus: "desc" }, { classificationConfidenceValue: "asc" }] }),
-    prisma.examObjective.findMany({ where: { versionId: ctx.vid }, orderBy: { order: "asc" }, select: { code: true, title: true } }),
-  ]);
+  const qs = await prisma.canonicalQuestion.findMany({ where: { versionId: ctx.vid, active: true, OR: [{ classificationStatus: "unmapped" }, { classificationConfidence: "low" }, { classificationStatus: "manual" }] }, orderBy: [{ classificationStatus: "desc" }, { classificationConfidenceValue: "asc" }] });
   return (
     <div>
-      <p className="mb-4 text-xs text-muted">Questions the keyword classifier could not map, or mapped with low confidence. Assign the objective you believe is correct; manual choices are copied into later drafts.</p>
+      <p className="mb-4 text-xs text-muted">Questions the keyword classifier could not map, or mapped with low confidence.</p>
       <Card>
         <div className="divide-y divide-line">
           {qs.map((q) => (
@@ -779,7 +712,7 @@ async function Classification({ ctx }: { ctx: Ctx }) {
               <span className="min-w-0 flex-1 truncate text-muted" title={q.classificationExplanation}>
                 {q.stem.replace(/\[\[img:\d+\]\]/g, "")}
               </span>
-              {ctx.canEdit ? <ClassificationPicker questionId={q.id} current={q.objectiveCode} objectives={objectives} /> : <span className="font-mono text-[12px] text-muted">{q.objectiveCode ?? "unmapped"}</span>}
+              <span className="font-mono text-[12px] text-muted">{q.objectiveCode ?? "unmapped"}</span>
             </div>
           ))}
         </div>
@@ -823,7 +756,7 @@ async function Imports({ ctx }: { ctx: Ctx }) {
   return (
     <div className="flex flex-col gap-5">
       <p className="text-xs text-muted">
-        Imports only ever write into draft versions: source occurrences are upserted by source key, canonical codes stay stable across versions, reviewer decisions are kept, and learner progress is never touched. New uploads and URLs are processed from Data Settings.
+        Import history for this version: source occurrences are keyed by source key, canonical codes stay stable across versions, reviewer decisions are kept, and learner progress is never touched.
       </p>
       {sourceRows.length > 0 && (
         <div className="flex items-center gap-2 text-sm font-medium text-fg" data-testid="inventory-identity-check">

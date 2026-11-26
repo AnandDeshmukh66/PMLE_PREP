@@ -23,7 +23,6 @@ import {
   Library,
   Eye,
   LayoutGrid,
-  SlidersHorizontal,
   History,
 } from "lucide-react";
 import { SaveIndicator } from "@/components/sync-provider";
@@ -73,7 +72,6 @@ function certGroups(base: string, c: SidebarCounts, showData: boolean, published
       label: "Content",
       items: [
         ...(showData && published ? [{ href: `${base}/data-quality`, label: "Exam Coverage & Quality", icon: Database, count: c.issues }] : []),
-        ...(showData ? [{ href: `${base}/data`, label: "Data Settings", icon: SlidersHorizontal }] : []),
       ],
     },
     {

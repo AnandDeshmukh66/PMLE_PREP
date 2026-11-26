@@ -12,7 +12,7 @@ None of these can be created by the app. They are your choices and your credenti
 | **`DATABASE_URL`** | Connection string for queries, stored in the host's secret manager | Neon: the **pooled** string (host contains `-pooler`) plus `&connect_timeout=15`, without `pgbouncer=true` (Neon's pooler supports prepared statements, and the flag made queries noticeably slower). Others: `postgresql://USER:PASSWORD@HOST:5432/DB?sslmode=require`. To use a schema other than `public`, add `&schema=NAME` to both URLs. |
 | **`DIRECT_URL`** | Connection string for migrations only | Neon: the **direct** string (no `-pooler`). Optional elsewhere; it defaults to `DATABASE_URL`. |
 | **`ALLOWED_EMAIL_DOMAINS`** | Who can sign in | For example `yourcompany.com`. In production nobody can sign in until this is set. |
-| **`ADMIN_EMAILS`** | Who can use admin tools | Admins add certifications, create and publish content versions, run ingestion, edit data-quality decisions and take database snapshots. Everyone else never sees drafts and sees data-quality pages read-only. |
+| **`ADMIN_EMAILS`** | Who can use admin tools | Admins open the read-only Exam Coverage & Quality page and take database snapshots. The app has no screens to add certifications, edit content or ingest exams (removed 2026-11-24). Everyone else gets 404 on the quality page. |
 | **`ADMIN_ACCESS_CODE`** | Second factor for admin actions | A shared secret of 8 or more characters (for example `openssl rand -base64 24`). A listed admin must enter it once per session (valid `ADMIN_ELEVATION_HOURS`, default 8) before any admin action. Because sign-in is by email only, **admin actions are disabled in production until this is set.** Five wrong codes in 15 minutes lock the account out for that window. |
 | **Hosting with HTTPS** | Runs `next start` | Any Node.js 20.9+ host: a VM, Cloud Run, App Engine flexible environment, Render, Fly.io, Kubernetes and so on. Put it behind HTTPS so session cookies are `Secure`. |
 | **Network access policy** | Email-only sign-in is *identification*, not strong authentication | Anyone who knows a colleague's address could sign in as them. Keep the site on the company network or VPN, or behind an identity-aware proxy (for example Google IAP or Cloudflare Access), if progress data matters. |
@@ -30,14 +30,14 @@ The app uses no paid APIs. The only costs are the hosting and the database you c
   - `proxy.ts` sends anonymous visitors to `/login`.
   - Every page, server action and API route then looks up the user on the server (`requireUser` / `apiUser`).
   - Every query on personal data filters by that user's ID. User IDs are never accepted from the browser.
-  - Admin actions check on the server that the email is in `ADMIN_EMAILS` **and** that the session was unlocked with `ADMIN_ACCESS_CODE`. Certification, version, ingestion-job and access-code events (including failed codes) are written to the `AuditEvent` table.
+  - Admin actions check on the server that the email is in `ADMIN_EMAILS` **and** that the session was unlocked with `ADMIN_ACCESS_CODE`. Access-code events (including failed codes) and offline import events are written to the `AuditEvent` table.
   - Learners can only read published and archived content versions. A draft or a version in review returns "not found" to them, on pages and in server actions.
 - **Certifications and versions.**
   - After sign-in, users land on the certification home (`/`), which shows each certification's latest published version and their progress. Each certification lives under `/c/<code>/…`. Old PMLE links such as `/questions/…` redirect to `/c/pmle/…`.
   - Content is versioned: `draft` → `review` → `published` → `archived`. Published versions never change; a correction is a new draft. Publishing a new version archives the old one, gives learners fresh progress on it, and keeps their old progress viewable. See [INGESTION.md](INGESTION.md), section 1.
-  - A certification added through **Add Certification** stays a draft, invisible to learners, until an admin publishes a version.
+  - A certification without a published version is invisible to everyone in the app.
 - **Data model.**
-  - **Shared by everyone:** certifications, content versions, questions, sources, answer verification, exam domains and objectives, theory concepts, ingestion jobs, and admin decisions. Questions, objectives and concepts belong to exactly one version.
+  - **Shared by everyone:** certifications, content versions, questions, sources, answer verification, exam domains and objectives, theory concepts, and past admin decisions. Questions, objectives and concepts belong to exactly one version.
   - **Personal** (each row has a `userId`, a foreign key and a cascade delete): attempts, flags, notes, theory progress, practice and mock sessions, plan ticks, settings, and the last visited page. Theory progress and plan ticks are kept per version.
 - **Saving.**
   - Clicks such as answers, flags, checkboxes and settings choices save straight away. Typing (notes, numbers) saves 0.8 seconds after you stop, and also when you leave the page.
@@ -74,7 +74,7 @@ npm run build          # regenerates the client for the same provider, then runs
 
 Then load the data, using **one** of the two options below.
 
-- **Option A: fresh bank.** Run `npm run ingest:db -- --publish`. It imports `data/processed/bank.json` as the PMLE version and publishes it. Without `--publish`, the version stays a draft for an admin to review. It can be re-run safely: an unchanged bank is skipped.
+- **Option A: fresh bank.** Run `npm run ingest:db -- --publish`. It imports `data/processed/bank.json` as the PMLE version and publishes it. Without `--publish`, the version stays an unpublished draft; the app has no screen to publish it, so use `--publish`. It can be re-run safely: an unchanged bank is skipped.
 - **Option B: carry over your local database**, which includes the bank, your data-quality decisions and existing progress:
 
   ```bash
@@ -100,7 +100,7 @@ Deploy these files with the app: `data/processed/bank.json` (needed by `ingest:d
   - Question IDs, attempt IDs and all progress are kept as they are. Theory progress and plan ticks get the version ID.
   - Afterwards, run `npm run ingest:db` once. It finds the bank unchanged and records the version's content fingerprint.
   - On the real SQLite database, row counts before and after were identical, and the SQLite integrity and foreign-key checks passed.
-- **Correcting content:** never edit a published version. In Data Settings, create a new draft (empty, or copied from an existing version), make the fixes or run ingestion into it, then submit and publish.
+- **Correcting content:** never edit a published version. Update the source data and re-run the offline pipeline and import (`npm run ingest`, `scripts/import-db.ts`). Publishing a corrected version is a developer task done with that script, not an in-app one; there is no in-app editor.
 - **Changing `prisma/schema.prisma`** (developers only):
   1. Create the SQLite migration: `npm run db:migrate:dev -- --name my_change`.
   2. Regenerate the Postgres schema: `npm run db:sync-schema`.
@@ -191,7 +191,6 @@ Test a restore into a scratch database at least once before you rely on it.
 
 - [ ] HTTPS in front of the app. Cookies become `Secure` automatically when the proxy sends `X-Forwarded-Proto: https`. Set `COOKIE_SECURE=true` if it doesn't.
 - [ ] `ALLOWED_EMAIL_DOMAINS`, `ADMIN_EMAILS` and `ADMIN_ACCESS_CODE` are set. `.env` is not committed, and secrets (including both database URLs) live in the host's secret manager. None of them are `NEXT_PUBLIC_` variables, so they never reach the browser.
-- [ ] If ingestion runs on this host, it can reach only the public internet it needs. Private addresses are already refused by the app.
 - [ ] Network-level access control or an identity-aware proxy is in place, if email-only sign-in isn't enough for you (see section 1).
 - [ ] The database is not publicly reachable, or requires TLS and a strong password, and the app's database user has only the access it needs.
 - [ ] Provider backups and PITR are on, and a restore has been tested.
@@ -201,11 +200,14 @@ Test a restore into a scratch database at least once before you rely on it.
 
 ## 8. Local development
 
-Nothing changes from before: `DATABASE_URL="file:../data/pmle.db"`, then `npm run setup` and `npm run dev`.
+PostgreSQL (Neon) is the single source of truth. `npm run dev` and `npm run start` use `DATABASE_URL` and `DIRECT_URL` from `.env`, so a local server reads and writes the same data as production. On startup the server logs `[db] Persisting to PostgreSQL <host>/<database> (schema …)`; check that line.
 
+- Next.js and `scripts/db.mjs` let `.env.local` (and the shell environment) override `.env`. Do not put a `file:` URL there: the app refuses SQLite unless `ALLOW_SQLITE=true` is also set, and SQLite data is never synchronised to PostgreSQL. `data/pmle.db` is a stale local copy kept only for reference.
+- The generated Prisma client follows the `DATABASE_URL` in effect when `npm run db:generate` (or `npm install` / `npm run build`) last ran. If the server reports a client/URL mismatch, run `npm run db:generate` and restart.
+- Never point anything that resets its target at the production URLs: `prisma migrate diff --shadow-database-url`, `prisma migrate dev`/`reset`, or `TEST_PG_URL`. Use a scratch Neon branch (`neon branches create`) or PGlite. Schema checks against production must be read-only, for example `npx prisma migrate status` or `npx prisma migrate diff --from-url "$DIRECT_URL" --to-schema-datamodel prisma/postgres/schema.prisma`.
 - With `ALLOWED_EMAIL_DOMAINS` unset (or `"*"`), any email works locally.
 - Open a private window to test as a second user.
-- `npm test` runs unit and integration tests on throwaway SQLite files.
-- `npm run test:e2e` runs browser tests against a production build.
-- To run the integration suite on PostgreSQL, set `TEST_PG_URL` (see section 4). A free local option is PGlite: `npx pglite-server --port=55432 --db=/tmp/pglite-data`, then `TEST_PG_URL="postgresql://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable&connection_limit=1&pgbouncer=true" npx vitest run tests/integration --no-file-parallelism` (generate the Postgres client with that URL first, and run `npm run db:generate` afterwards to switch back to SQLite).
+- `npm test` runs unit and integration tests on throwaway SQLite files. The integration tests need the SQLite client: run `DATABASE_URL="file:../data/test-base.db" npm run db:generate` first and `npm run db:generate` afterwards to switch back to PostgreSQL.
+- `npm run test:e2e` runs browser tests against a production build on a throwaway SQLite file (`ALLOW_SQLITE=true` is set in `playwright.config.ts`); it needs the SQLite client in the same way.
+- To run the integration suite on PostgreSQL, set `TEST_PG_URL` (see section 4) to a scratch database, never production. A free local option is PGlite: `npx pglite-server --port=55432 --db=/tmp/pglite-data`, then `TEST_PG_URL="postgresql://postgres:postgres@127.0.0.1:55432/postgres?sslmode=disable&connection_limit=1&pgbouncer=true" npx vitest run tests/integration --no-file-parallelism`.
 - Locally, with `ADMIN_ACCESS_CODE` unset, listed admins aren't asked for a code. Set it to test the production behaviour.

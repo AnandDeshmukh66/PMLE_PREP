@@ -1,8 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import { bulkUpdate, chunks, datasourceUrlOf, tableRef } from "@/lib/bulk";
-import { describeStart } from "@/lib/ingest/jobs";
-import { isValidOccurrence, lifecycle } from "@/lib/quality";
+import { isValidOccurrence } from "@/lib/quality";
 
 const PG = "postgresql://u:p@localhost:5432/db";
 
@@ -73,22 +72,5 @@ describe("quality rules", () => {
     expect(isValidOccurrence(occ("Short?", ["GCS", "PD"]))).toBe(false);
     expect(isValidOccurrence(occ("Which service stores objects durably?", ["GCS"]))).toBe(false);
     expect(isValidOccurrence(occ("Which service stores objects durably?", ["GCS", "PD"], ["answer_not_in_options"]))).toBe(false);
-  });
-
-  const base = { sources: [] as never[], jobs: { open: 0, waiting: 0, running: 0 }, questions: { total: 0, gradable: 0, ungradable: 0, mapped: 0, unmapped: 0, multiSource: 0, conflicts: 0 }, duplicates: { merged: 0, approved: 0, pending: 0, rejected: 0 }, issues: { error: 0, warning: 0, info: 0, kinds: [] }, readiness: { errors: ["No questions"], warnings: [], stats: {} } };
-  it("the lifecycle starts at 'Source added' and marks waiting sources as the current step", () => {
-    const empty = lifecycle(base as never, "draft");
-    expect(empty.map((s) => s.state)).toEqual(["current", "todo", "todo", "todo", "todo"]);
-    const waiting = lifecycle({ ...base, sources: [{ state: "waiting" }] } as never, "draft");
-    expect(waiting[1]).toMatchObject({ id: "processing", state: "current", detail: "1 waiting for Start processing" });
-    const done = lifecycle({ ...base, sources: [{ state: "processed" }], questions: { ...base.questions, total: 3 }, readiness: { errors: [], warnings: [], stats: {} } } as never, "draft");
-    expect(done.map((s) => s.state)).toEqual(["done", "done", "done", "done", "current"]);
-  });
-
-  it("start messages report real counts", () => {
-    expect(describeStart({ started: 2, resumed: 0, queued: 0, running: 0 })).toMatch(/^Started processing 2 sources\./);
-    expect(describeStart({ started: 0, resumed: 1, queued: 0, running: 0 })).toMatch(/^Resumed 1 scheduled retry\./);
-    expect(describeStart({ started: 0, resumed: 0, queued: 0, running: 1 })).toMatch(/1 source is already being processed/);
-    expect(describeStart({ started: 0, resumed: 0, queued: 0, running: 0 })).toMatch(/^Nothing to process/);
   });
 });

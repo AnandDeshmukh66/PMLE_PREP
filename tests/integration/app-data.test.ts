@@ -158,45 +158,14 @@ describe("one shared question bank across views", () => {
   });
 });
 
-describe("duplicate review (drafts only)", () => {
-  it("is refused on the published version", async () => {
-    const pair = await m.prisma.duplicateCandidate.findFirstOrThrow({ where: { versionId: V, status: "auto_confirmed", stage: "fuzzy" } });
-    await expect(m.actions.decideDuplicate(V, pair.pairKey, "reject")).rejects.toThrow(/cannot be changed/);
-  });
-
-  it("splits on reject and restores on undo inside the draft, leaving the published version untouched", async () => {
-    const pubInv = await m.inventory.computeInventory(m.prisma, V);
-    const pair = await m.prisma.duplicateCandidate.findFirstOrThrow({ where: { versionId: draftId, status: "auto_confirmed", stage: "fuzzy" }, orderBy: { pairKey: "asc" } });
-    const occA = await m.prisma.sourceOccurrence.findUniqueOrThrow({ where: { versionId_sourceKey: { versionId: draftId, sourceKey: pair.aKey } }, include: { canonical: true } });
-    const inv0 = await m.inventory.computeInventory(m.prisma, draftId);
-
-    await m.actions.decideDuplicate(draftId, pair.pairKey, "reject");
-    const inv1 = await m.inventory.computeInventory(m.prisma, draftId);
-    expect(inv1.uniqueQuestions).toBe(inv0.uniqueQuestions + 1);
-    expect(inv1.confirmedOverlap).toBe(inv0.confirmedOverlap - 1);
-    expect(inv1.identityHolds).toBe(true);
-
-    await m.actions.decideDuplicate(draftId, pair.pairKey, "undo");
-    const inv2 = await m.inventory.computeInventory(m.prisma, draftId);
-    expect(inv2.uniqueQuestions).toBe(inv0.uniqueQuestions);
-    const after = await m.prisma.sourceOccurrence.findUniqueOrThrow({ where: { versionId_sourceKey: { versionId: draftId, sourceKey: pair.aKey } }, include: { canonical: true } });
-    expect(after.canonical!.code).toBe(occA.canonical!.code);
-    expect(await m.inventory.computeInventory(m.prisma, V)).toEqual(pubInv);
-  });
-});
-
 describe("answer verification workflow", () => {
-  it("records unverified answers without grading; corrections happen in a draft and never regrade old attempts", async () => {
+  it("records unverified answers without grading", async () => {
     const q = await m.prisma.canonicalQuestion.findFirstOrThrow({ where: { versionId: V, active: true, verification: "conflict" }, orderBy: { code: "asc" } });
     const r = ok(await m.actions.submitAnswer({ clientId: cid(), questionId: q.id, selected: ["A"], mode: "browse" }));
     expect(r.outcome).toBe("ungraded");
     expect(r.isCorrect).toBeNull();
     expect(r.correctLabels).toBeNull();
 
-    await expect(m.actions.resolveAnswer(q.id, ["A"], "checked docs")).rejects.toThrow(/cannot be changed/);
-    const dq = await m.prisma.canonicalQuestion.findUniqueOrThrow({ where: { versionId_code: { versionId: draftId, code: q.code } } });
-    await m.actions.resolveAnswer(dq.id, ["A"], "checked docs");
-    expect((await m.prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: dq.id } })).verification).toBe("user_verified");
     expect((await m.prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: q.id } })).verification).toBe("conflict");
     const att = await m.prisma.questionAttempt.findUniqueOrThrow({ where: { id: r.attemptId } });
     expect(att.isCorrect).toBeNull();

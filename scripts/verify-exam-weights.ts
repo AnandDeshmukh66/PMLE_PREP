@@ -33,9 +33,9 @@ function python(): string {
   return fs.existsSync(venv) ? venv : "python3";
 }
 
-/** Guide sections from a PDF, extracted with the same PyMuPDF script ingestion uses. */
+/** Guide sections from a PDF, extracted with the PyMuPDF script scripts/pdf_extract.py. */
 function guideSections(file: string): GuideSection[] {
-  const r = spawnSync(python(), [path.join(ROOT, "scripts/ingest/pdf_extract.py"), file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(python(), [path.join(ROOT, "scripts/pdf_extract.py"), file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`pdf_extract.py failed (${r.status}): ${r.stderr.slice(0, 300)}`);
   const out = JSON.parse(r.stdout) as { error?: string; message?: string; pages?: { text: string }[] };
   if (out.error) throw new Error(`${out.error}: ${out.message ?? ""}`);

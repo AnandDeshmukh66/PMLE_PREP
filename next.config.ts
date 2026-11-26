@@ -5,11 +5,11 @@ import { devOrigins } from "./lib/dev-origins";
 const LEGACY_SECTIONS = ["questions", "practice", "mock", "theory", "plan", "analytics", "blueprint", "review", "flagged", "incorrect", "bookmarks", "data-quality"];
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@prisma/client", "playwright", "playwright-core"],
+  serverExternalPackages: ["@prisma/client"],
   devIndicators: false,
   allowedDevOrigins: devOrigins(),
   experimental: {
-    // Uploads (PDF up to 25 MB) pass through proxy.ts, which would otherwise truncate bodies above 10 MB.
+    // Progress backups restored through /api/me/restore pass through proxy.ts, which would otherwise truncate bodies above 10 MB.
     proxyClientMaxBodySize: "26mb",
     serverActions: { bodySizeLimit: "2mb" },
   },

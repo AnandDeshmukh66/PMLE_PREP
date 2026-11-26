@@ -5,6 +5,7 @@ This folder holds one plan per **significant** feature or change. Add one only w
 | Plan | Status |
 |---|---|
 | [exam-guide-mapping.md](exam-guide-mapping.md): Questions & Review consolidation, learner source abstraction, Exam Coverage & Quality | Completed 2026-11-21 |
+| [remove-data-settings-and-exam-ingestion.md](remove-data-settings-and-exam-ingestion.md): removal of Data Settings, Add Certification and in-app exam ingestion; Exam Coverage & Quality kept read-only and published-only | Completed 2026-11-24 |
 
 ## When to write a plan
 

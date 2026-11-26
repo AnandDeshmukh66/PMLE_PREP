@@ -15,6 +15,19 @@ Append-only record of **meaningful completed work**. Newest entry first. Do not 
 
 ---
 
+## 2026-11-24: Removed Data Settings, Add Certification and in-app ingestion
+
+- **Feature / change:** Implemented [implementation-plans/remove-data-settings-and-exam-ingestion.md](implementation-plans/remove-data-settings-and-exam-ingestion.md) ahead of the portal demo.
+- **What was completed:**
+  - Removed the Data Settings page, the Add Certification page, the in-app ingestion pipeline (PDF, website, OCR, JSON, job worker), the upload API route, the draft-editing actions and components, and the `ingest:worker` script. `/c/<slug>/data` and `/certifications/new` now return 404 for everyone; the home page shows only active certifications with a published version.
+  - Exam Coverage & Quality stays, administrators only, with all eight tabs, now strictly read-only and published-version only: `loadDraftQuality` was replaced by `loadPublishedQuality`, which throws for draft, review and archived versions; the page ignores `?version=`.
+  - Preserved learner features, `/api/pdf`, `/api/exhibit`, the offline `scripts/import-db.ts`, and the exam-guide verifier (its PDF helper moved to `scripts/pdf_extract.py`).
+- **Important files / areas:** `lib/quality.ts`, `lib/actions.ts`, `lib/cert.ts`, `app/(portal)/c/[cert]/data-quality/page.tsx`, `app/(portal)/(home)/page.tsx`, `components/sidebar.tsx`, `next.config.ts`, `package.json`, `.env.example`, `tests/e2e/`.
+- **Implementation notes:**
+  - No schema change, no migration and no database write. `IngestionJob` and `UploadedFile` remain in both schemas with their data.
+  - Verified locally (SQLite and PGlite only): tsc, eslint, next build, Vitest on SQLite (148 passed) and on PostgreSQL via PGlite (145 passed, 3 skipped), Playwright e2e (25 passed), and the exam-weight verifier smoke test (PASS).
+  - `docs/INGESTION.md` is kept as an archived description of the removed system.
+
 ## 2026-11-21: Questions & Review, learner source abstraction, Exam Coverage & Quality
 
 - **Feature / change:** Implemented [implementation-plans/exam-guide-mapping.md](implementation-plans/exam-guide-mapping.md) (revision 2), phases 0 to 6.

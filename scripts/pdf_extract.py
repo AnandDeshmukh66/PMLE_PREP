@@ -1,10 +1,12 @@
-"""Per-page text extraction for ingestion jobs (PyMuPDF), with OCR for scanned pages when tesseract is available.
+"""Per-page text extraction for a PDF (PyMuPDF), with OCR for scanned pages when tesseract is available.
 
-    python scripts/ingest/pdf_extract.py <file.pdf> [--tesseract <bin>] [--max-pages N]
+Used by scripts/verify-exam-weights.ts to read the official exam guide.
+
+    python scripts/pdf_extract.py <file.pdf> [--tesseract <bin>] [--max-pages N]
 
 Prints one JSON object: {"page_count", "pages": [{"page", "text", "method", "confidence"}], "warnings", "error"?}.
 The input file is only read. Pages without a text layer are rendered and OCR'd; if OCR is unavailable they are
-reported as empty so the job can flag them instead of silently skipping content.
+reported as empty instead of silently skipping content.
 """
 
 import json

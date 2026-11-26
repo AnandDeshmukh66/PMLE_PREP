@@ -1,3 +1,5 @@
+> **Archived (2026-11-24): this describes a system that no longer exists in the application.** The Data Settings page, Add Certification, uploads, the ingestion pipeline, the job worker and the draft editing screens were removed ([plan](implementation-plans/remove-data-settings-and-exam-ingestion.md)). The `IngestionJob` and `UploadedFile` tables remain in the database, unused and untouched. Content now enters only through the offline import (`scripts/import-db.ts`); see [CURRENT_STATE.md](CURRENT_STATE.md) section 11. Nothing below reflects current behaviour.
+
 # Content ingestion
 
 How question content gets from a PDF, a web page or a JSON file into a certification, and how it reaches learners.

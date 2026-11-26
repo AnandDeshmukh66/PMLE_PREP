@@ -4,8 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { type Ack, invalid, notFound, UNAUTHENTICATED } from "./ack";
-import { type CurrentUser, getCurrentUser, requireAdmin, requireUser } from "./auth";
-import { rebuildCanonicals, recomputeVerification } from "./canonicalize";
+import { type CurrentUser, getCurrentUser, requireUser } from "./auth";
 import { assertVisibleVersion, NotVisibleError, publishedVersionId, visibleQuestion } from "./cert";
 import { LEGACY_PMLE_SLUG, LEGACY_PMLE_VERSION_ID, LOCATION_RE } from "./cert-rules";
 import { prisma } from "./db";
@@ -13,11 +12,9 @@ import { gradeAnswer, type Outcome } from "./grading";
 import { parseJson, sortedLabels } from "./json";
 import { submitMockSession } from "./mock";
 import { loadQuestionRows } from "./questions";
-import { refreshReviewQueue } from "./review-queue";
 import { LEARNER_HIDDEN_MODES, selectMock, selectPractice, type PracticeConfig, PRACTICE_MODES } from "./selection";
 import { getSettings, SETTINGS_SCHEMA, type Settings } from "./settings";
 import { isGradable } from "./verification";
-import { assertEditable, refreshVersionStats } from "./versions";
 
 function refreshAll() {
   revalidatePath("/", "layout");
@@ -457,107 +454,4 @@ export async function submitMock(sessionId: string, auto = false) {
   const r = await submitMockSession(user.id, z.string().min(1).max(40).parse(sessionId), auto);
   refreshAll();
   return r;
-}
-
-// ---------------------------------------------------------------- shared question bank (administrators, drafts only)
-// Published versions are immutable; these edits apply to a draft and reach learners when it is published.
-
-const VersionId = z.string().min(1).max(40);
-const PairKey = z.string().min(3).max(300);
-
-export async function decideDuplicate(versionId: string, pairKey: string, action: "approve" | "reject" | "undo") {
-  await requireAdmin();
-  const vid = VersionId.parse(versionId);
-  await assertEditable(prisma, vid);
-  const where = { versionId_pairKey: { versionId: vid, pairKey: PairKey.parse(pairKey) } };
-  const c = await prisma.duplicateCandidate.findUniqueOrThrow({ where });
-  let status = c.status;
-  let previousStatus = c.previousStatus;
-  if (action === "approve") {
-    previousStatus = c.status;
-    status = "approved";
-  } else if (action === "reject") {
-    previousStatus = c.status;
-    status = "rejected";
-  } else {
-    status = c.previousStatus ?? c.suggestedDecision;
-    previousStatus = null;
-  }
-  await prisma.duplicateCandidate.update({ where, data: { status, previousStatus, decidedAt: new Date() } });
-  const summary = await rebuildCanonicals(prisma, { versionId: vid, onlyChanged: true });
-  await prisma.importIssue.updateMany({
-    where: { versionId: vid, issueKey: `dup:${c.pairKey}` },
-    data: status === "approved" || status === "rejected" ? { status: "resolved", resolution: status } : { status: "open", resolution: null },
-  });
-  await refreshVersionStats(prisma, vid, { hashes: true });
-  refreshAll();
-  return summary;
-}
-
-/** Sets the reviewer's answer for a draft question (a user_override claim), recomputing its verification. */
-export async function resolveAnswer(questionId: number, labels: string[] | null, note?: string) {
-  await requireAdmin();
-  const q = await prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: QuestionId.parse(questionId) } });
-  await assertEditable(prisma, q.versionId);
-  const claimKey = `user_override:${questionId}`;
-  await prisma.$transaction(async (tx) => {
-    if (labels && labels.length) {
-      const l = sortedLabels(Labels.parse(labels));
-      await tx.answerClaim.upsert({
-        where: { versionId_claimKey: { versionId: q.versionId, claimKey } },
-        create: { versionId: q.versionId, claimKey, questionId, kind: "user_override", labels: JSON.stringify(l), sourceLabels: JSON.stringify(l), createdBy: "user" },
-        update: { labels: JSON.stringify(l), sourceLabels: JSON.stringify(l) },
-      });
-    } else {
-      await tx.answerClaim.deleteMany({ where: { versionId: q.versionId, claimKey } });
-    }
-    await recomputeVerification(tx, questionId);
-    await tx.importIssue.updateMany({
-      where: { versionId: q.versionId, questionId, kind: { in: ["answer_conflict", "answer_contested", "missing_answer"] } },
-      data: labels && labels.length ? { status: "resolved", resolution: `Resolved to ${sortedLabels(labels).join(", ")}${note ? `: ${note.slice(0, 500)}` : ""}` } : { status: "open", resolution: null },
-    });
-  });
-  refreshAll();
-  return q.code;
-}
-
-export async function setIssueStatus(versionId: string, issueKey: string, status: "open" | "resolved" | "ignored", resolution?: string) {
-  await requireAdmin();
-  const vid = VersionId.parse(versionId);
-  await assertEditable(prisma, vid);
-  await prisma.importIssue.update({
-    where: { versionId_issueKey: { versionId: vid, issueKey: z.string().min(1).max(400).parse(issueKey) } },
-    data: { status: z.enum(["open", "resolved", "ignored"]).parse(status), resolution: resolution?.slice(0, 500) ?? null },
-  });
-  refreshAll();
-}
-
-export async function setManualClassification(questionId: number, objectiveCode: string) {
-  await requireAdmin();
-  const q = await prisma.canonicalQuestion.findUniqueOrThrow({ where: { id: QuestionId.parse(questionId) }, select: { versionId: true } });
-  await assertEditable(prisma, q.versionId);
-  const obj = await prisma.examObjective.findUniqueOrThrow({ where: { versionId_code: { versionId: q.versionId, code: z.string().max(10).parse(objectiveCode) } } });
-  await prisma.$transaction(async (tx) => {
-    await tx.canonicalQuestion.update({
-      where: { id: questionId },
-      data: { objectiveCode, domainNumber: obj.domainNumber, classificationStatus: "manual", classificationConfidence: "high", classificationExplanation: `Manually classified to objective ${objectiveCode}.` },
-    });
-    await tx.questionObjectiveMapping.deleteMany({ where: { questionId } });
-    await tx.questionObjectiveMapping.create({ data: { versionId: q.versionId, questionId, objectiveCode, role: "primary" } });
-    await tx.importIssue.updateMany({ where: { versionId: q.versionId, questionId, kind: { in: ["classification_unmapped", "classification_low_confidence"] } }, data: { status: "resolved", resolution: `Manually set to ${objectiveCode}` } });
-  });
-  refreshAll();
-}
-
-/** Excludes (or restores) a source occurrence in a draft: excluded occurrences form no question and are not published. */
-export async function setOccurrenceExcluded(versionId: string, sourceKey: string, excluded: boolean) {
-  await requireAdmin();
-  const vid = VersionId.parse(versionId);
-  await assertEditable(prisma, vid);
-  await prisma.sourceOccurrence.update({ where: { versionId_sourceKey: { versionId: vid, sourceKey: z.string().min(1).max(200).parse(sourceKey) } }, data: { excluded: z.boolean().parse(excluded) } });
-  const summary = await rebuildCanonicals(prisma, { versionId: vid, onlyChanged: true });
-  await refreshReviewQueue(prisma, vid);
-  await refreshVersionStats(prisma, vid, { hashes: true });
-  refreshAll();
-  return summary;
 }
